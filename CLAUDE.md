@@ -9,7 +9,7 @@ This folder is the active frontend app for `/arena`.
 - Visible app name: `NARA Arena`
 - Deploy target: `vercel`
 - Public route: `/arena`
-- GitHub repo: `https://github.com/NARAProtocol/nara-arena`
+- GitHub repo: `https://github.com/NARAProtocol/arena_run_ui-.git`
 
 ## Runtime Baseline
 
@@ -49,3 +49,10 @@ This folder is the active frontend app for `/arena`.
 - sync and retry copy exists for stale epoch errors
 - `npm test` passes
 - `npm run build` passes
+
+
+## Vercel Deploy Rule
+
+- If Vercel Git deploys are blocked on the private Hobby workspace, use the documented owner-token deploy path instead of debugging app code first.
+- The permanent production path is GitHub Actions with `VERCEL_TOKEN`, `VERCEL_ORG_ID`, and `VERCEL_PROJECT_ID`.
+- Treat blocked Vercel Git deployments as a workspace permission issue, not a frontend regression.
