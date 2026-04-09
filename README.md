@@ -27,6 +27,11 @@ Required:
 
 ```bash
 VITE_RAINBOW_PROJECT_ID=your_project_id
+```
+
+Recommended override:
+
+```bash
 VITE_ARENA_ADDRESS=0x6a1d3f01EFB35F3A8d5d6B3101f2764Bdf47cf3b
 ```
 
@@ -37,6 +42,11 @@ VITE_WALLETCONNECT_PROJECT_ID=your_project_id
 VITE_ARENA_SNAPSHOT_URL=/arena-leaderboard.snapshot.json
 VITE_BOARD_API_URL=https://www.naraprotocol.io/mine/api/board
 ```
+
+## Address Fallback
+
+- If `VITE_ARENA_ADDRESS` is missing at build time, the app now falls back to the live Base arena address `0x6a1d3f01EFB35F3A8d5d6B3101f2764Bdf47cf3b`.
+- Keep the Vercel env set anyway. The fallback exists to stop production builds from silently shipping a disabled sponsor and join surface.
 
 ## Vercel Notes
 

@@ -1,8 +1,10 @@
 import { formatEther, formatUnits, isAddress, parseEther, parseUnits } from "viem";
 
+export const LIVE_ARENA_ADDRESS = "0x6a1d3f01EFB35F3A8d5d6B3101f2764Bdf47cf3b" as const;
+
 export const ARENA_ADDRESS = import.meta.env.VITE_ARENA_ADDRESS && isAddress(import.meta.env.VITE_ARENA_ADDRESS)
   ? import.meta.env.VITE_ARENA_ADDRESS
-  : undefined;
+  : LIVE_ARENA_ADDRESS;
 
 export const SNAPSHOT_URL = import.meta.env.VITE_ARENA_SNAPSHOT_URL || "/arena-leaderboard.snapshot.json";
 export const BOARD_API_URL = import.meta.env.VITE_BOARD_API_URL || "https://www.naraprotocol.io/mine/api/board";
