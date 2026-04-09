@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://www.naraprotocol.io/arena/sitemap.xml
