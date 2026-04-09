@@ -2,18 +2,8 @@
   "redirects": [
     {
       "source": "/",
-      "destination": "/run",
+      "destination": "/arena",
       "permanent": false
-    }
-  ],
-  "rewrites": [
-    {
-      "source": "/run",
-      "destination": "/index.html"
-    },
-    {
-      "source": "/run/(.*)",
-      "destination": "/index.html"
     }
   ]
 }
