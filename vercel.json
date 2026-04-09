@@ -1,7 +1,18 @@
-{
+﻿{
+  "redirects": [
+    {
+      "source": "/",
+      "destination": "/run",
+      "permanent": false
+    }
+  ],
   "rewrites": [
     {
-      "source": "/(.*)",
+      "source": "/run",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/run/(.*)",
       "destination": "/index.html"
     }
   ]
