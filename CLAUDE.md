@@ -53,6 +53,9 @@ This folder is the active frontend app for `/arena`.
 
 ## Vercel Deploy Rule
 
-- If Vercel Git deploys are blocked on the private Hobby workspace, use the documented owner-token deploy path instead of debugging app code first.
+- Do not assume a public GitHub repo removes the Vercel Hobby deploy block. The workspace can still block deploys based on commit author identity.
+- If Vercel shows `The Deployment was blocked because the commit author does not have contributing access to the project on Vercel.`, stop debugging app code. This is a Vercel permission issue.
+- Do not push release-trigger commits from a generic git identity like `User <user@example.com>`. That author was already confirmed to produce blocked arena deploys.
+- For manual owner-author fallback commits in this repo, use `NARAProtocol <naraprotocol@gmail.com>`.
 - The permanent production path is GitHub Actions with `VERCEL_TOKEN`, `VERCEL_ORG_ID`, and `VERCEL_PROJECT_ID`.
-- Treat blocked Vercel Git deployments as a workspace permission issue, not a frontend regression.
+- If Git auto-deploy is blocked, prefer the GitHub Actions production workflow over repeated manual pushes.
