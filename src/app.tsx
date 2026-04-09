@@ -62,6 +62,8 @@ type BoardResponse = {
 type FeedItem = { id: string; label: string; meta: string };
 type ContractReadResult = { status: string; result?: unknown };
 
+const TRACK_LENGTH = 100;
+
 const READ_INDEX = {
   entryFee: 0,
   prizeTotals: 1,
@@ -96,6 +98,18 @@ function readSuccessResult(results: readonly ContractReadResult[] | undefined, i
   return item?.status === "success" ? item.result : undefined;
 }
 
+function progressPercent(position: bigint) {
+  const units = Number(position) / 1e18;
+  if (!Number.isFinite(units) || units <= 0) return 0;
+  return Math.max(0, Math.min((units / TRACK_LENGTH) * 100, 100));
+}
+
+function trackMeter(position: bigint) {
+  const units = Number(position) / 1e18;
+  if (!Number.isFinite(units) || units <= 0) return "0.0 / 100";
+  return `${units.toFixed(1)} / ${TRACK_LENGTH}`;
+}
+
 function WalletStatus() {
   return (
     <ConnectButton.Custom>
@@ -103,12 +117,42 @@ function WalletStatus() {
         const ready = mounted && authenticationStatus !== "loading";
         const connected = ready && account && chain && (!authenticationStatus || authenticationStatus === "authenticated");
 
-        if (!ready) return <button className="app-wallet ghost">Loading...</button>;
-        if (!connected) return <button className="app-wallet" onClick={openConnectModal}>Connect Wallet</button>;
-        if (chain.unsupported) return <button className="app-wallet" onClick={openChainModal}>{`Switch to ${APP_CHAIN_NAME}`}</button>;
-        return <button className="app-wallet" onClick={openAccountModal}>{account.displayName}</button>;
+        if (!ready) return <button className="broadcast-wallet ghost">Loading...</button>;
+        if (!connected) return <button className="broadcast-wallet" onClick={openConnectModal}>Connect Wallet</button>;
+        if (chain.unsupported) return <button className="broadcast-wallet" onClick={openChainModal}>{`Switch to ${APP_CHAIN_NAME}`}</button>;
+        return <button className="broadcast-wallet" onClick={openAccountModal}>{account.displayName}</button>;
       }}
     </ConnectButton.Custom>
+  );
+}
+
+function StatusStrip({ tone, title, body }: { tone: "warning" | "info" | "success"; title: string; body: string }) {
+  return (
+    <section className={`status-strip ${tone}`}>
+      <strong>{title}</strong>
+      <span>{body}</span>
+    </section>
+  );
+}
+
+function ActionCard({
+  label,
+  amount,
+  tone = "default",
+  disabled,
+  onClick,
+}: {
+  label: string;
+  amount: bigint;
+  tone?: "default" | "danger";
+  disabled: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button className={`action-card ${tone}`} disabled={disabled} onClick={onClick}>
+      <span>{label}</span>
+      <strong>{formatToken(amount)} NARA</strong>
+    </button>
   );
 }
 
@@ -318,235 +362,332 @@ export default function App() {
   const headlineEth = prize?.[4] ?? 0n;
   const headlineNara = prize?.[5] ?? 0n;
   const harvestableSponsors = prize?.[6] ?? 0n;
+  const prizePoolEth = arenaState?.[4] ?? 0n;
+  const prizePoolNara = arenaState?.[5] ?? 0n;
+  const totalBurned = arenaState?.[6] ?? 0n;
   const totalEntries = arenaState?.[7] ?? 0n;
   const totalRewardsForwarded = arenaState?.[8] ?? 0n;
+  const arenaEpoch = arenaState?.[3] ?? 0n;
+  const userHeat = runnerState ? Number(runnerState[5]) : 0;
+  const userBurned = runnerState ? (runnerState[6] as bigint) : 0n;
   const userPendingEth = runnerState ? (runnerState[7] as bigint) : 0n;
   const userPendingNara = runnerState ? (runnerState[8] as bigint) : 0n;
   const userPosition = runnerState ? (runnerState[0] as bigint) : 0n;
   const userActive = runnerState ? Boolean(runnerState[9]) : false;
+  const runnerLaneIndex = runnerState ? Number(runnerState[10] ?? 0) : 0;
   const boardStatus = boardClaim ? `Slot #${boardClaim.slotNum} · ${boardClaim.tierKey.toUpperCase()}` : "No board claim";
   const boardAlias = boardClaim?.alias?.trim() ? boardClaim.alias : shortAddress(boardClaim?.wallet);
   const joinBlockedByPrizeSeed = sponsorCount === 0n || (headlineEth === 0n && headlineNara === 0n);
+  const isOverdrive = Boolean(
+    overdriveWindow &&
+      Date.now() >= Number(overdriveWindow[0]) * 1000 &&
+      Date.now() < Number(overdriveWindow[1]) * 1000,
+  );
+  const raceProgress = progressPercent(userPosition);
+  const raceMeter = trackMeter(userPosition);
+  const stageMode = !ARENA_ADDRESS
+    ? "offline"
+    : isWrongNetwork
+      ? "wrong network"
+      : joinBlockedByPrizeSeed
+        ? "seed prize"
+        : userActive
+          ? "runner live"
+          : "entry open";
+  const stagePrompt = !isConnected
+    ? "Connect a wallet to enter the track."
+    : isWrongNetwork
+      ? `Switch to ${APP_CHAIN_NAME} before sending arena actions.`
+      : joinBlockedByPrizeSeed
+        ? "Sponsor capital must seed the purse before player entry goes live."
+        : userActive
+          ? "You are on the board. Burn NARA to gain distance or hit a rival."
+          : `Entry is live at ${formatEntryLabel(entryFee)}. Burn NARA to move. Burn harder to make the board feel you.`;
+  const feedHeadline = feed[0]?.label ?? "No live action yet";
+  const feedMeta = feed[0]?.meta ?? "Once joins, burns, and settlements land, the arena feed will stream here.";
 
   return (
     <main className="arena-shell">
-      <header className="arena-hero">
-        <div className="hero-copy">
-          <p className="arena-kicker">Burn NARA. Race for prize. Feed lockers.</p>
+      <header className="broadcast-header">
+        <div className="broadcast-copy">
+          <p className="broadcast-kicker">Live combat layer for NARA lockers</p>
           <h1>NARA Arena</h1>
-          <p className="arena-copy">
-            Players burn NARA to advance. Every entry fee routes to locker rewards. Sponsors build the prize without taking player odds.
+          <p className="broadcast-copy-text">
+            This is not a passive dashboard. It is a live race where players burn NARA for position, sponsors build the purse,
+            and every entry sends ETH back to lockers.
           </p>
         </div>
-        <div className="hero-actions">
-          <div className="hero-chip">Base Mainnet</div>
+        <div className="broadcast-sidecar">
+          <div className="signal-block">
+            <span>Network</span>
+            <strong>Base Mainnet</strong>
+          </div>
+          <div className="signal-block accent">
+            <span>Stage mode</span>
+            <strong>{stageMode}</strong>
+          </div>
           <WalletStatus />
         </div>
       </header>
 
+      <section className="ticker-strip">
+        <div className="ticker-label">Field report</div>
+        <div className="ticker-copy">
+          <strong>{feedHeadline}</strong>
+          <span>{feedMeta}</span>
+        </div>
+      </section>
+
       {!ARENA_ADDRESS ? (
-        <section className="arena-banner warning">
-          <strong>App not configured.</strong>
-          <span>Set <code>VITE_ARENA_ADDRESS</code> to enable live reads and writes.</span>
-        </section>
+        <StatusStrip tone="warning" title="Arena address missing" body="Set VITE_ARENA_ADDRESS to enable the live race surface." />
       ) : null}
-
       {isWrongNetwork ? (
-        <section className="arena-banner warning">
-          <strong>Wrong network.</strong>
-          <span>Switch your wallet to {APP_CHAIN_NAME} before using the arena.</span>
-        </section>
+        <StatusStrip tone="warning" title="Wrong network" body={`Switch your wallet to ${APP_CHAIN_NAME} before using arena actions.`} />
       ) : null}
-
-      {statusText ? (
-        <section className="arena-banner info">
-          <span>{statusText}</span>
-        </section>
-      ) : null}
-
+      {statusText ? <StatusStrip tone="info" title="Transaction status" body={statusText} /> : null}
       {joinBlockedByPrizeSeed ? (
-        <section className="arena-banner warning">
-          <strong>Arena not seeded yet.</strong>
-          <span>The sponsor lane must be funded before player entry opens. This prevents paying locker rewards into an empty race.</span>
-        </section>
+        <StatusStrip tone="warning" title="Prize lane not seeded" body="The sponsor lane must be funded before the player gate opens. This prevents dead-on-arrival races." />
       ) : null}
 
-      <section className="arena-grid top-grid">
-        <article className="arena-panel spotlight">
-          <div className="panel-head">
-            <span>Headline Prize</span>
-            <strong>{formatEthValue(headlineEth)} ETH + {formatToken(headlineNara)} NARA</strong>
+      <section className="arena-stage-grid">
+        <article className={`stage-panel ${isOverdrive ? "overdrive" : ""}`}>
+          <div className="stage-topline">
+            <div>
+              <span className="micro-label">Combat theater</span>
+              <strong>{userActive ? `${boardAlias} is on the track` : "No runner committed yet"}</strong>
+            </div>
+            <div className="stage-chip-row">
+              <div className="stage-chip">Epoch {arenaEpoch.toString()}</div>
+              <div className={`stage-chip ${isOverdrive ? "hot" : ""}`}>{isOverdrive ? "Overdrive live" : "Standard burn"}</div>
+            </div>
           </div>
-          <div className="metric-row"><span>Harvested</span><strong>{formatEthValue(harvestedEth)} ETH / {formatToken(harvestedNara)} NARA</strong></div>
-          <div className="metric-row"><span>Still accruing</span><strong>{formatEthValue(unharvestedEth)} ETH / {formatToken(unharvestedNara)} NARA</strong></div>
-          <div className="metric-row"><span>Harvestable sponsors</span><strong>{harvestableSponsors.toString()}</strong></div>
+
+          <div className="track-shell">
+            <div className="track-ruler">
+              {[0, 25, 50, 75, 100].map((mark) => (
+                <span key={mark} style={{ left: `${mark}%` }}>{mark}</span>
+              ))}
+            </div>
+            <div className="track-lane">
+              <div className="track-grid-lines" />
+              <div className="track-finish">Finish</div>
+              <div className="track-runner" style={{ left: `calc(${raceProgress}% - 18px)` }}>
+                <div className="runner-core" />
+                <strong>{userActive ? boardAlias : "You"}</strong>
+              </div>
+              <div className="track-burst-zone">CULL PRESSURE</div>
+            </div>
+            <div className="track-readout">
+              <div>
+                <span className="micro-label">Track position</span>
+                <strong>{raceMeter}</strong>
+              </div>
+              <div>
+                <span className="micro-label">Lane slot</span>
+                <strong>{runnerLaneIndex > 0 ? runnerLaneIndex.toString() : "watch"}</strong>
+              </div>
+              <div>
+                <span className="micro-label">Heat</span>
+                <strong>{userHeat.toString()}</strong>
+              </div>
+            </div>
+          </div>
+
+          <p className="stage-prompt">{stagePrompt}</p>
         </article>
 
-        <article className="arena-panel">
-          <div className="panel-head">
-            <span>Locker Benefit</span>
-            <strong>{formatEthValue(totalRewardsForwarded)} ETH routed</strong>
+        <aside className="stage-side-column">
+          <article className="stage-card prize">
+            <div className="panel-header compact">
+              <span>Prize board</span>
+              <strong>{formatEthValue(headlineEth)} ETH + {formatToken(headlineNara)} NARA</strong>
+            </div>
+            <div className="stat-line"><span>Harvested</span><strong>{formatEthValue(harvestedEth)} ETH / {formatToken(harvestedNara)} NARA</strong></div>
+            <div className="stat-line"><span>Accruing</span><strong>{formatEthValue(unharvestedEth)} ETH / {formatToken(unharvestedNara)} NARA</strong></div>
+            <div className="stat-line"><span>Pool live now</span><strong>{formatEthValue(prizePoolEth)} ETH / {formatToken(prizePoolNara)} NARA</strong></div>
+            <div className="stat-line"><span>Harvestable sponsors</span><strong>{harvestableSponsors.toString()}</strong></div>
+          </article>
+
+          <article className="stage-card clock">
+            <div className="panel-header compact">
+              <span>Race clock</span>
+              <strong>{formatCountdown(nextCull)}</strong>
+            </div>
+            <div className="stat-line"><span>Next cull</span><strong>{formatCountdown(nextCull)}</strong></div>
+            <div className="stat-line"><span>Next epoch</span><strong>{formatCountdown(nextEpoch)}</strong></div>
+            <div className="stat-line"><span>Overdrive window</span><strong>{overdriveWindow ? `${formatClock(overdriveWindow[0])} -> ${formatClock(overdriveWindow[1])}` : "-"}</strong></div>
+            <div className="stat-line"><span>Active runners</span><strong>{activeRunnerCount.toString()}</strong></div>
+          </article>
+        </aside>
+      </section>
+
+      <section className="arena-command-grid">
+        <article className="command-panel play-panel">
+          <div className="panel-header">
+            <span>Command deck</span>
+            <strong>{formatEntryLabel(entryFee)}</strong>
           </div>
-          <div className="metric-row"><span>Queued reward ETH</span><strong>{formatEthValue(pendingRewardEth)} ETH</strong></div>
-          <div className="metric-row"><span>Total entries</span><strong>{formatEthValue(totalEntries)} ETH</strong></div>
-          <p className="panel-note">
-            Every player entry fee routes to <code>engine.notifyEthRewards()</code>. Arena players create ETH flow for lockers on every join.
+          <div className="command-intro">
+            <p>
+              Enter the arena, then use bigger burns when it matters. Movement is pressure. Sabotage is denial. Both cost real NARA.
+            </p>
+            <button
+              className="primary-cta"
+              disabled={!ARENA_ADDRESS || !isConnected || isWrongNetwork || isPending || !entryFee || joinBlockedByPrizeSeed}
+              onClick={sendJoin}
+            >
+              Enter the race for {formatEntryLabel(entryFee)}
+            </button>
+          </div>
+
+          <div className="command-cluster">
+            <div className="cluster-head">
+              <span className="micro-label">Forward burns</span>
+              <strong>Move</strong>
+            </div>
+            <div className="action-grid three-up">
+              {ACTION_PRESETS.move.map((preset) => (
+                <ActionCard
+                  key={preset.label}
+                  label={preset.label}
+                  amount={preset.amount}
+                  disabled={!ARENA_ADDRESS || !isConnected || isWrongNetwork || isPending}
+                  onClick={() => sendMove(preset.amount)}
+                />
+              ))}
+            </div>
+          </div>
+
+          <div className="command-cluster sabotage-cluster">
+            <div className="cluster-head">
+              <span className="micro-label">Targeted pressure</span>
+              <strong>Sabotage</strong>
+            </div>
+            <input
+              className="command-input"
+              value={target}
+              onChange={(event) => setTarget(event.target.value)}
+              placeholder="0x... runner address"
+            />
+            <div className="action-grid two-up">
+              {ACTION_PRESETS.sabotage.map((preset) => (
+                <ActionCard
+                  key={preset.label}
+                  label={preset.label}
+                  amount={preset.amount}
+                  tone="danger"
+                  disabled={!ARENA_ADDRESS || !isConnected || isWrongNetwork || isPending}
+                  onClick={() => sendSabotage(preset.amount)}
+                />
+              ))}
+            </div>
+          </div>
+
+          <div className="claim-bar">
+            <div>
+              <span className="micro-label">Unclaimed winnings</span>
+              <strong>{formatEthValue(userPendingEth)} ETH + {formatToken(userPendingNara)} NARA</strong>
+            </div>
+            <button
+              className="secondary-cta"
+              disabled={!ARENA_ADDRESS || !isConnected || isWrongNetwork || isPending || (userPendingEth === 0n && userPendingNara === 0n)}
+              onClick={sendClaim}
+            >
+              Claim winnings
+            </button>
+          </div>
+        </article>
+
+        <article className="command-panel sponsor-panel">
+          <div className="panel-header">
+            <span>Sponsor lane</span>
+            <strong>{sponsorCount.toString()} sponsors</strong>
+          </div>
+          <p className="panel-copy">
+            Sponsors do not race. They lock NARA through engine clones and route the yield into the purse. That keeps the spectacle funded without corrupting player odds.
           </p>
+          <div className="stat-stack">
+            <div className="stat-line"><span>Sponsor TVL</span><strong>{formatToken(sponsorTvl)} NARA</strong></div>
+            <div className="stat-line"><span>Engine lock fee</span><strong>{formatEthValue(lockFee)} ETH</strong></div>
+            <div className="stat-line"><span>Prize source</span><strong>Sponsor clone rewards</strong></div>
+            <div className="stat-line"><span>Minimum live seed</span><strong>1 sponsor position</strong></div>
+          </div>
+          <div className="form-stack">
+            <label className="field-label">
+              <span>Amount</span>
+              <input className="command-input" value={sponsorAmount} onChange={(event) => setSponsorAmount(event.target.value)} placeholder="1000 NARA" />
+            </label>
+            <label className="field-label">
+              <span>Duration</span>
+              <input className="command-input" value={sponsorDuration} onChange={(event) => setSponsorDuration(event.target.value)} placeholder="96 epochs" />
+            </label>
+            <button
+              className="secondary-cta"
+              disabled={!ARENA_ADDRESS || !isConnected || isWrongNetwork || isPending || lockFee === undefined}
+              onClick={sendSponsorDeposit}
+            >
+              Fund sponsor position
+            </button>
+          </div>
+        </article>
+
+        <article className="command-panel identity-panel">
+          <div className="panel-header">
+            <span>Combat identity</span>
+            <strong>{userActive ? "Runner active" : "Spectator mode"}</strong>
+          </div>
+          <div className="identity-hero">
+            <div className="identity-mark">R{burnRank}</div>
+            <div>
+              <span className="micro-label">Board alias</span>
+              <strong>{boardAlias}</strong>
+              <p>{boardStatus}</p>
+            </div>
+          </div>
+          <div className="stat-stack">
+            <div className="stat-line"><span>Your burn</span><strong>{formatToken(userBurned)} NARA</strong></div>
+            <div className="stat-line"><span>Race position</span><strong>{raceMeter}</strong></div>
+            <div className="stat-line"><span>Locker benefit</span><strong>{formatEthValue(totalRewardsForwarded)} ETH routed</strong></div>
+            <div className="stat-line"><span>Queued reward ETH</span><strong>{formatEthValue(pendingRewardEth)} ETH</strong></div>
+            <div className="stat-line"><span>Total arena burn</span><strong>{formatToken(totalBurned)} NARA</strong></div>
+            <div className="stat-line"><span>Total entry flow</span><strong>{formatEthValue(totalEntries)} ETH</strong></div>
+          </div>
           <button
-            className="secondary-button"
+            className="ghost-cta"
             disabled={!ARENA_ADDRESS || pendingRewardEth === 0n || isPending || isWrongNetwork}
             onClick={sendFlush}
           >
             Flush queued reward ETH
           </button>
         </article>
-
-        <article className="arena-panel">
-          <div className="panel-head">
-            <span>Race Clock</span>
-            <strong>{overdriveWindow ? formatCountdown(overdriveWindow[1]) : "-"}</strong>
-          </div>
-          <div className="metric-row"><span>Next cull</span><strong>{formatCountdown(nextCull)}</strong></div>
-          <div className="metric-row"><span>Next epoch</span><strong>{formatCountdown(nextEpoch)}</strong></div>
-          <div className="metric-row"><span>Overdrive window</span><strong>{overdriveWindow ? `${formatClock(overdriveWindow[0])} -> ${formatClock(overdriveWindow[1])}` : "-"}</strong></div>
-          <div className="metric-row"><span>Active runners</span><strong>{activeRunnerCount.toString()}</strong></div>
-        </article>
       </section>
 
-      <section className="arena-grid middle-grid">
-        <article className="arena-panel control-panel">
-          <div className="panel-head">
-            <span>Play Arena</span>
-            <strong>{formatEntryLabel(entryFee)}</strong>
-          </div>
-          <p className="panel-note">
-            Move burns use <strong>2 / 10 / 30</strong> NARA. Sabotage burns use <strong>10 / 30</strong> NARA. Burning is the gameplay fuel, not a protocol tax.
-          </p>
-          <button
-            className="primary-button"
-            disabled={!ARENA_ADDRESS || !isConnected || isWrongNetwork || isPending || !entryFee || joinBlockedByPrizeSeed}
-            onClick={sendJoin}
-          >
-            Join for {formatEntryLabel(entryFee)}
-          </button>
-          <div className="action-group">
-            <label>Move</label>
-            <div className="button-row">
-              {ACTION_PRESETS.move.map((preset) => (
-                <button
-                  key={preset.label}
-                  className="action-button"
-                  disabled={!ARENA_ADDRESS || !isConnected || isWrongNetwork || isPending}
-                  onClick={() => sendMove(preset.amount)}
-                >
-                  <span>{preset.label}</span>
-                  <strong>{formatToken(preset.amount)} NARA</strong>
-                </button>
-              ))}
-            </div>
-          </div>
-          <div className="action-group">
-            <label>Sabotage Target</label>
-            <input
-              className="arena-input"
-              value={target}
-              onChange={(event) => setTarget(event.target.value)}
-              placeholder="0x... runner address"
-            />
-            <div className="button-row compact">
-              {ACTION_PRESETS.sabotage.map((preset) => (
-                <button
-                  key={preset.label}
-                  className="action-button danger"
-                  disabled={!ARENA_ADDRESS || !isConnected || isWrongNetwork || isPending}
-                  onClick={() => sendSabotage(preset.amount)}
-                >
-                  <span>{preset.label}</span>
-                  <strong>{formatToken(preset.amount)} NARA</strong>
-                </button>
-              ))}
-            </div>
-          </div>
-          <div className="claim-strip">
-            <div>
-              <span>Your pending</span>
-              <strong>{formatEthValue(userPendingEth)} ETH + {formatToken(userPendingNara)} NARA</strong>
-            </div>
-            <button
-              className="secondary-button"
-              disabled={!ARENA_ADDRESS || !isConnected || isWrongNetwork || isPending || (userPendingEth === 0n && userPendingNara === 0n)}
-              onClick={sendClaim}
-            >
-              Claim
-            </button>
-          </div>
-        </article>
-
-        <article className="arena-panel sponsor-panel">
-          <div className="panel-head">
-            <span>Sponsor Lane</span>
-            <strong>{sponsorCount.toString()} sponsors</strong>
-          </div>
-          <div className="metric-row"><span>Sponsor TVL</span><strong>{formatToken(sponsorTvl)} NARA</strong></div>
-          <div className="metric-row"><span>Prize source</span><strong>Sponsor clone rewards</strong></div>
-          <div className="metric-row"><span>Engine lock fee</span><strong>{formatEthValue(lockFee)} ETH</strong></div>
-          <p className="panel-note">
-            Sponsors lock NARA through engine clones. Their rewards feed the arena prize. Sponsors never enter winner selection, and the sponsor deposit must send the exact engine lock fee.
-          </p>
-          <div className="sponsor-form">
-            <input className="arena-input" value={sponsorAmount} onChange={(event) => setSponsorAmount(event.target.value)} placeholder="1000 NARA" />
-            <input className="arena-input" value={sponsorDuration} onChange={(event) => setSponsorDuration(event.target.value)} placeholder="96 epochs" />
-            <button
-              className="secondary-button"
-              disabled={!ARENA_ADDRESS || !isConnected || isWrongNetwork || isPending || lockFee === undefined}
-              onClick={sendSponsorDeposit}
-            >
-              Sponsor deposit
-            </button>
-          </div>
-        </article>
-
-        <article className="arena-panel identity-panel">
-          <div className="panel-head">
-            <span>Your Lane</span>
-            <strong>{userActive ? "Active" : "Watching"}</strong>
-          </div>
-          <div className="metric-row"><span>Position</span><strong>{formatToken(userPosition)}</strong></div>
-          <div className="metric-row"><span>Burn rank</span><strong>Rank {burnRank}</strong></div>
-          <div className="metric-row"><span>Board badge</span><strong>{boardStatus}</strong></div>
-          <div className="metric-row"><span>Board alias</span><strong>{boardAlias}</strong></div>
-          <p className="panel-note">
-            The social stack is board identity plus arena aggression: founder proof on the board, public combat in the arena.
-          </p>
-        </article>
-      </section>
-
-      <section className="arena-grid bottom-grid">
-        <article className="arena-panel ledger-panel">
-          <div className="panel-head">
-            <span>Recent Arena Feed</span>
+      <section className="arena-intel-grid">
+        <article className="intel-panel feed-panel">
+          <div className="panel-header">
+            <span>Live event tape</span>
             <strong>{feed.length}</strong>
           </div>
-          <div className="feed-list">
+          <div className="tape-list">
             {feed.length ? feed.map((item) => (
-              <div key={item.id} className="feed-item">
+              <div key={item.id} className="tape-item">
                 <strong>{item.label}</strong>
                 <span>{item.meta}</span>
               </div>
-            )) : <div className="empty-state">Recent on-chain feed will appear once the arena address is configured and live events are available.</div>}
+            )) : <div className="empty-slot">Recent on-chain activity will appear here once joins, burns, and settlements start landing.</div>}
           </div>
         </article>
 
-        <article className="arena-panel leaderboard-panel">
-          <div className="panel-head">
-            <span>Historical Leaderboards</span>
+        <article className="intel-panel leaderboard-panel">
+          <div className="panel-header">
+            <span>Hall of pressure</span>
             <strong>{snapshot?.generatedAt ? new Date(snapshot.generatedAt).toLocaleString() : "No snapshot"}</strong>
           </div>
-          <div className="leaderboard-grid">
-            <Leaderboard title="Lifetime Burners" entries={snapshot?.leaderboards.topLifetimeBurners} field="lifetimeBurned" />
+          <div className="leaderboard-matrix">
+            <Leaderboard title="Lifetime burners" entries={snapshot?.leaderboards.topLifetimeBurners} field="lifetimeBurned" />
             <Leaderboard title="Winners" entries={snapshot?.leaderboards.topWinners} field="lifetimeWins" />
             <Leaderboard title="Top 5" entries={snapshot?.leaderboards.topTop5} field="lifetimeEpochTop5" />
-            <Leaderboard title="Cull Survivors" entries={snapshot?.leaderboards.topCullSurvivors} field="lifetimeCullSurvivals" />
+            <Leaderboard title="Cull survivors" entries={snapshot?.leaderboards.topCullSurvivors} field="lifetimeCullSurvivals" />
           </div>
         </article>
       </section>
@@ -556,8 +697,8 @@ export default function App() {
 
 function Leaderboard({ title, entries, field }: { title: string; entries?: SnapshotEntry[]; field: keyof SnapshotEntry }) {
   return (
-    <section className="leaderboard-block">
-      <header>
+    <section className="leaderboard-module">
+      <header className="leaderboard-head">
         <span>{title}</span>
       </header>
       <div className="leaderboard-list">
@@ -571,9 +712,8 @@ function Leaderboard({ title, entries, field }: { title: string; entries?: Snaps
               <em>{display}</em>
             </div>
           );
-        }) : <div className="empty-state">Snapshot not available yet.</div>}
+        }) : <div className="empty-slot">Snapshot not available yet.</div>}
       </div>
     </section>
   );
 }
-
