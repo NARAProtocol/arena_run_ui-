@@ -1,5 +1,5 @@
 import { ConnectButton } from "@rainbow-me/rainbowkit";
-import { useEffect, useState } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 import { parseAbiItem } from "viem";
 import {
   useAccount,
@@ -10,43 +10,41 @@ import {
   useWriteContract,
 } from "wagmi";
 
+import { FeedCard } from "./components/FeedCard";
+import { IdentityCard } from "./components/IdentityCard";
+import { LeaderboardCard } from "./components/LeaderboardCard";
+import { LiveCountdown } from "./components/LiveCountdown";
+import { PlayControls } from "./components/PlayControls";
+import { PrizeClock } from "./components/PrizeClock";
+import { RaceTrack } from "./components/RaceTrack";
+import { SponsorCard } from "./components/SponsorCard";
 import { APP_CHAIN_ID, APP_CHAIN_NAME } from "./shared/wallet";
 import {
-  ACTION_PRESETS,
   ARENA_ADDRESS,
   arenaAbi,
   BOARD_API_URL,
   DEFAULT_SPONSOR_DURATION,
-  formatClock,
-  formatCountdown,
+  ethToUsd,
   formatEntryLabel,
   formatEthValue,
   formatToken,
+  formatUsd,
+  naraToUsd,
+  naraTokenAbi,
+  NARA_TOKEN_ADDRESS,
   parseSponsorAmount,
   parseSponsorDuration,
   parseTargetValue,
+  progressPercent,
+  shortAddress,
   SNAPSHOT_URL,
   sponsorDefaultValue,
+  trackMeter,
+  type FeedItem,
+  type SnapshotData,
 } from "./shared/arena";
 
-type SnapshotEntry = {
-  player: string;
-  burnRank: number;
-  lifetimeBurned: string;
-  lifetimeWins: string;
-  lifetimeEpochTop5: string;
-  lifetimeCullSurvivals: string;
-};
-
-type SnapshotData = {
-  generatedAt: string;
-  leaderboards: {
-    topLifetimeBurners: SnapshotEntry[];
-    topWinners: SnapshotEntry[];
-    topTop5: SnapshotEntry[];
-    topCullSurvivors: SnapshotEntry[];
-  };
-};
+// ─── Types (local to data-fetching layer) ────────────────────────────────────
 
 type BoardClaim = {
   wallet: string;
@@ -59,10 +57,9 @@ type BoardResponse = {
   slots: Array<{ claim: BoardClaim | null }>;
 };
 
-type FeedItem = { id: string; label: string; meta: string };
 type ContractReadResult = { status: string; result?: unknown };
 
-const TRACK_LENGTH = 100;
+// ─── Contract read index ─────────────────────────────────────────────────────
 
 const READ_INDEX = {
   entryFee: 0,
@@ -80,35 +77,65 @@ const READ_INDEX = {
   burnRank: 12,
 } as const;
 
+// ─── On-chain events ──────────────────────────────────────────────────────────
+
 const joinedEvent = parseAbiItem("event Joined(address indexed runner, uint256 entryFeeWei)");
 const forwardEvent = parseAbiItem("event Forward(address indexed runner, uint256 naraBurned, uint256 distanceMoved, uint256 newPosition, uint256 heatStreak)");
 const sabotageEvent = parseAbiItem("event Sabotage(address indexed attacker, address indexed target, uint256 naraBurned, uint256 distancePushed, uint256 targetNewPosition, uint256 attackerHeatStreak)");
 const epochSettledEvent = parseAbiItem("event EpochSettled(uint64 indexed epoch, uint256 distributedEth, uint256 distributedNara, address winner, uint256 winnerAmountEth, uint256 winnerAmountNara, uint256 topFiveAmountEth, uint256 topFiveAmountNara)");
 
-function shortAddress(value?: string) {
-  return value ? `${value.slice(0, 6)}...${value.slice(-4)}` : "-";
+// ─── Market prices hook ───────────────────────────────────────────────────────
+
+const NARA_ADDR = "0xe444de61752bd13d1d37ee59c31ef4e489bd727c";
+const WETH_ADDR = "0x4200000000000000000000000000000000000006";
+const GECKO_TOKEN = (addr: string) => `https://api.geckoterminal.com/api/v2/networks/base/tokens/${addr}`;
+const GECKO_POOLS  = (addr: string) => `https://api.geckoterminal.com/api/v2/networks/base/tokens/${addr}/pools?page=1`;
+
+function useMarketPrices(): { nara: number | null; eth: number | null } {
+  const [prices, setPrices] = useState<{ nara: number | null; eth: number | null }>({ nara: null, eth: null });
+  useEffect(() => {
+    let active = true;
+    async function load() {
+      try {
+        // ETH price: token endpoint is reliable for WETH
+        const ethData = await fetch(GECKO_TOKEN(WETH_ADDR)).then((r) => r.json());
+        const eth = parseFloat(ethData?.data?.attributes?.price_usd);
+
+        // NARA price: token endpoint returns null (thin liquidity) — use pools instead
+        // Pick the pool with highest reserve to get the most accurate price
+        let nara: number | null = null;
+        const poolData = await fetch(GECKO_POOLS(NARA_ADDR)).then((r) => r.json());
+        const pools: Array<{ attributes: { base_token_price_usd: string; quote_token_price_usd: string; reserve_in_usd: string }; relationships: { base_token: { data: { id: string } } } }> = poolData?.data ?? [];
+        // Sort by reserve descending, take the most liquid pool
+        const sorted = [...pools].sort((a, b) =>
+          parseFloat(b.attributes?.reserve_in_usd ?? "0") - parseFloat(a.attributes?.reserve_in_usd ?? "0")
+        );
+        for (const pool of sorted) {
+          const isBase = pool.relationships?.base_token?.data?.id?.toLowerCase().includes(NARA_ADDR.toLowerCase());
+          const rawPrice = isBase
+            ? parseFloat(pool.attributes?.base_token_price_usd)
+            : parseFloat(pool.attributes?.quote_token_price_usd);
+          if (Number.isFinite(rawPrice) && rawPrice > 0) {
+            nara = rawPrice;
+            break;
+          }
+        }
+
+        if (!active) return;
+        setPrices({
+          nara,
+          eth: Number.isFinite(eth) && eth > 0 ? eth : null,
+        });
+      } catch { /* prices stay null */ }
+    }
+    load();
+    const id = setInterval(load, 60_000);
+    return () => { active = false; clearInterval(id); };
+  }, []);
+  return prices;
 }
 
-function normalizeAddress(value?: string) {
-  return value?.toLowerCase();
-}
-
-function readSuccessResult(results: readonly ContractReadResult[] | undefined, index: number) {
-  const item = results?.[index];
-  return item?.status === "success" ? item.result : undefined;
-}
-
-function progressPercent(position: bigint) {
-  const units = Number(position) / 1e18;
-  if (!Number.isFinite(units) || units <= 0) return 0;
-  return Math.max(0, Math.min((units / TRACK_LENGTH) * 100, 100));
-}
-
-function trackMeter(position: bigint) {
-  const units = Number(position) / 1e18;
-  if (!Number.isFinite(units) || units <= 0) return "0.0 / 100";
-  return `${units.toFixed(1)} / ${TRACK_LENGTH}`;
-}
+// ─── Small UI components ──────────────────────────────────────────────────────
 
 function WalletStatus() {
   return (
@@ -116,7 +143,6 @@ function WalletStatus() {
       {({ account, chain, mounted, authenticationStatus, openAccountModal, openChainModal, openConnectModal }) => {
         const ready = mounted && authenticationStatus !== "loading";
         const connected = ready && account && chain && (!authenticationStatus || authenticationStatus === "authenticated");
-
         if (!ready) return <button className="arena-wallet ghost">Loading...</button>;
         if (!connected) return <button className="arena-wallet" onClick={openConnectModal}>Connect wallet</button>;
         if (chain.unsupported) return <button className="arena-wallet" onClick={openChainModal}>{`Switch to ${APP_CHAIN_NAME}`}</button>;
@@ -127,49 +153,61 @@ function WalletStatus() {
 }
 
 function StatusStrip({ tone, title, body }: { tone: "warning" | "info" | "success"; title: string; body: string }) {
+  const [isNew, setIsNew] = useState(true);
+  useEffect(() => {
+    setIsNew(true);
+    const t = setTimeout(() => setIsNew(false), 500);
+    return () => clearTimeout(t);
+  }, [title, body]);
   return (
-    <section className={`notice-strip ${tone}`}>
+    <section className={`notice-strip ${tone}${isNew && tone === "warning" ? " is-new" : ""}`}>
       <strong>{title}</strong>
       <span>{body}</span>
     </section>
   );
 }
 
-function ActionCard({
+function MetricCard({
   label,
-  amount,
-  tone = "default",
-  disabled,
-  onClick,
+  value,
+  hint,
+  loading,
+  className,
 }: {
   label: string;
-  amount: bigint;
-  tone?: "default" | "danger";
-  disabled: boolean;
-  onClick: () => void;
+  value: ReactNode;
+  hint?: ReactNode;
+  loading?: boolean;
+  className?: string;
 }) {
   return (
-    <button className={`action-chip ${tone}`} disabled={disabled} onClick={onClick}>
+    <article className={`metric-card${className ? ` ${className}` : ""}`}>
       <span>{label}</span>
-      <strong>{formatToken(amount)} NARA</strong>
-    </button>
-  );
-}
-
-function MetricCard({ label, value, hint }: { label: string; value: string; hint?: string }) {
-  return (
-    <article className="metric-card">
-      <span>{label}</span>
-      <strong>{value}</strong>
-      {hint ? <small>{hint}</small> : null}
+      {loading ? <strong><span className="skeleton skeleton-wide">&nbsp;</span></strong> : <strong>{value}</strong>}
+      {loading ? <small><span className="skeleton skeleton-line">&nbsp;</span></small> : hint ? <small>{hint}</small> : null}
     </article>
   );
 }
 
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function normalizeAddress(value?: string) {
+  return value?.toLowerCase();
+}
+
+function readSuccessResult(results: readonly ContractReadResult[] | undefined, index: number) {
+  const item = results?.[index];
+  return item?.status === "success" ? item.result : undefined;
+}
+
+// ─── Main App (data + state orchestrator) ─────────────────────────────────────
+
 export default function App() {
+  const prices = useMarketPrices();
   const { address, isConnected, chainId } = useAccount();
   const publicClient = usePublicClient();
   const isWrongNetwork = Boolean(isConnected && chainId !== APP_CHAIN_ID);
+
   const [target, setTarget] = useState("");
   const [sponsorAmount, setSponsorAmount] = useState(sponsorDefaultValue());
   const [sponsorDuration, setSponsorDuration] = useState(DEFAULT_SPONSOR_DURATION.toString());
@@ -177,6 +215,9 @@ export default function App() {
   const [feed, setFeed] = useState<FeedItem[]>([]);
   const [boardClaim, setBoardClaim] = useState<BoardClaim | null>(null);
   const [statusText, setStatusText] = useState<string>("");
+  const [feedTick, setFeedTick] = useState(0);
+
+  // ── Contract reads ──────────────────────────────────────────────────────────
 
   const readContracts = ARENA_ADDRESS
     ? [
@@ -200,10 +241,7 @@ export default function App() {
       ]
     : [];
 
-  const { data: arenaReads, refetch } = useReadContracts({
-    allowFailure: true,
-    contracts: readContracts,
-  });
+  const { data: arenaReads, refetch } = useReadContracts({ allowFailure: true, contracts: readContracts });
   const readResults = arenaReads as readonly ContractReadResult[] | undefined;
 
   const engineAddress = readSuccessResult(readResults, READ_INDEX.engine) as `0x${string}` | undefined;
@@ -214,8 +252,10 @@ export default function App() {
     query: { enabled: Boolean(engineAddress) },
   });
 
-  const { writeContract, data: hash, isPending } = useWriteContract();
+  const { writeContract, writeContractAsync, data: hash, isPending } = useWriteContract();
   const { isLoading: isConfirming, isSuccess } = useWaitForTransactionReceipt({ hash });
+
+  // ── Derived contract state ──────────────────────────────────────────────────
 
   const entryFee = readSuccessResult(readResults, READ_INDEX.entryFee) as bigint | undefined;
   const prize = readSuccessResult(readResults, READ_INDEX.prizeTotals) as readonly bigint[] | undefined;
@@ -230,140 +270,6 @@ export default function App() {
   const runnerState = address ? (readSuccessResult(readResults, READ_INDEX.runner) as readonly unknown[] | undefined) : undefined;
   const burnRankValue = address ? readSuccessResult(readResults, READ_INDEX.burnRank) : undefined;
   const burnRank = burnRankValue === undefined ? 0 : Number(burnRankValue);
-
-  useEffect(() => {
-    fetch(SNAPSHOT_URL)
-      .then((response) => (response.ok ? response.json() : null))
-      .then((data) => setSnapshot(data))
-      .catch(() => setSnapshot(null));
-  }, []);
-
-  useEffect(() => {
-    if (!address) {
-      setBoardClaim(null);
-      return;
-    }
-    const lower = normalizeAddress(address);
-    fetch(BOARD_API_URL)
-      .then((response) => (response.ok ? response.json() : null))
-      .then((data: BoardResponse | null) => {
-        if (!data || !lower) {
-          setBoardClaim(null);
-          return;
-        }
-        const claim = data.slots.find((slot) => normalizeAddress(slot.claim?.wallet) === lower)?.claim ?? null;
-        setBoardClaim(claim);
-      })
-      .catch(() => setBoardClaim(null));
-  }, [address]);
-
-  useEffect(() => {
-    const client = publicClient!;
-    if (!ARENA_ADDRESS || !client) return;
-    let active = true;
-
-    async function loadFeed() {
-      const blockNumber = await client.getBlockNumber();
-      const fromBlock = blockNumber > 5000n ? blockNumber - 5000n : 0n;
-      const [joined, moved, sabotaged, settled] = await Promise.all([
-        client.getLogs({ address: ARENA_ADDRESS, event: joinedEvent, fromBlock }),
-        client.getLogs({ address: ARENA_ADDRESS, event: forwardEvent, fromBlock }),
-        client.getLogs({ address: ARENA_ADDRESS, event: sabotageEvent, fromBlock }),
-        client.getLogs({ address: ARENA_ADDRESS, event: epochSettledEvent, fromBlock }),
-      ]);
-      if (!active) return;
-
-      const items: FeedItem[] = [
-        ...joined.slice(-4).map((log, index) => ({
-          id: `j-${index}-${log.transactionHash}`,
-          label: "Joined",
-          meta: `${shortAddress(log.args.runner)} paid ${formatEntryLabel(log.args.entryFeeWei)}`,
-        })),
-        ...moved.slice(-4).map((log, index) => ({
-          id: `f-${index}-${log.transactionHash}`,
-          label: "Move",
-          meta: `${shortAddress(log.args.runner)} burned ${formatToken(log.args.naraBurned)} NARA`,
-        })),
-        ...sabotaged.slice(-4).map((log, index) => ({
-          id: `s-${index}-${log.transactionHash}`,
-          label: "Sabotage",
-          meta: `${shortAddress(log.args.attacker)} hit ${shortAddress(log.args.target)}`,
-        })),
-        ...settled.slice(-2).map((log, index) => ({
-          id: `e-${index}-${log.transactionHash}`,
-          label: "Epoch settled",
-          meta: `${shortAddress(log.args.winner)} took ${formatEthValue(log.args.winnerAmountEth)} ETH + ${formatToken(log.args.winnerAmountNara)} NARA`,
-        })),
-      ];
-      setFeed(items.reverse().slice(0, 8));
-    }
-
-    loadFeed().catch(() => setFeed([]));
-    return () => {
-      active = false;
-    };
-  }, [publicClient, isSuccess]);
-
-  useEffect(() => {
-    if (isPending) setStatusText("Waiting for wallet confirmation...");
-    else if (isConfirming) setStatusText("Transaction submitted. Waiting for Base confirmation...");
-    else if (isSuccess) {
-      setStatusText("Transaction confirmed.");
-      refetch();
-    }
-  }, [isPending, isConfirming, isSuccess, refetch]);
-
-  function sendJoin() {
-    if (!ARENA_ADDRESS || !entryFee) return;
-    setStatusText("");
-    writeContract({ address: ARENA_ADDRESS, abi: arenaAbi, functionName: "join", value: entryFee });
-  }
-
-  function sendMove(amount: bigint) {
-    if (!ARENA_ADDRESS) return;
-    setStatusText("");
-    writeContract({ address: ARENA_ADDRESS, abi: arenaAbi, functionName: "move", args: [amount] });
-  }
-
-  function sendSabotage(amount: bigint) {
-    const parsedTarget = parseTargetValue(target);
-    if (!ARENA_ADDRESS || !parsedTarget) {
-      setStatusText("Enter a valid target address for sabotage.");
-      return;
-    }
-    setStatusText("");
-    writeContract({ address: ARENA_ADDRESS, abi: arenaAbi, functionName: "sabotage", args: [parsedTarget, amount] });
-  }
-
-  function sendClaim() {
-    if (!ARENA_ADDRESS) return;
-    setStatusText("");
-    writeContract({ address: ARENA_ADDRESS, abi: arenaAbi, functionName: "claim" });
-  }
-
-  function sendSponsorDeposit() {
-    if (!ARENA_ADDRESS || lockFee === undefined) return;
-    try {
-      const amount = parseSponsorAmount(sponsorAmount);
-      const duration = parseSponsorDuration(sponsorDuration);
-      setStatusText("");
-      writeContract({
-        address: ARENA_ADDRESS,
-        abi: arenaAbi,
-        functionName: "sponsorDeposit",
-        args: [amount, duration],
-        value: lockFee,
-      });
-    } catch {
-      setStatusText("Enter a valid sponsor amount and duration.");
-    }
-  }
-
-  function sendFlush() {
-    if (!ARENA_ADDRESS) return;
-    setStatusText("");
-    writeContract({ address: ARENA_ADDRESS, abi: arenaAbi, functionName: "flushRewardEth" });
-  }
 
   const harvestedEth = prize?.[0] ?? 0n;
   const harvestedNara = prize?.[1] ?? 0n;
@@ -385,8 +291,9 @@ export default function App() {
   const userPosition = runnerState ? (runnerState[0] as bigint) : 0n;
   const userActive = runnerState ? Boolean(runnerState[9]) : false;
   const runnerLaneIndex = runnerState ? Number(runnerState[10] ?? 0) : 0;
-  const boardStatus = boardClaim ? `slot #${boardClaim.slotNum} � ${boardClaim.tierKey.toUpperCase()}` : "No board claim";
-  const boardAlias = boardClaim?.alias?.trim() ? boardClaim.alias : shortAddress(boardClaim?.wallet);
+
+  // ── Derived UI state ────────────────────────────────────────────────────────
+
   const joinBlockedByPrizeSeed = sponsorCount === 0n || (headlineEth === 0n && headlineNara === 0n);
   const isOverdrive = Boolean(
     overdriveWindow &&
@@ -395,6 +302,11 @@ export default function App() {
   );
   const raceProgress = progressPercent(userPosition);
   const raceMeter = trackMeter(userPosition);
+
+  const boardClaim_ = boardClaim;
+  const boardStatus = boardClaim_ ? `slot #${boardClaim_.slotNum} · ${boardClaim_.tierKey.toUpperCase()}` : "No board claim";
+  const boardAlias = boardClaim_?.alias?.trim() ? boardClaim_.alias : shortAddress(boardClaim_?.wallet);
+
   const stageMode = !ARENA_ADDRESS
     ? "offline"
     : isWrongNetwork
@@ -404,21 +316,183 @@ export default function App() {
         : userActive
           ? "runner live"
           : "entry open";
+
   const feedHeadline = feed[0]?.label ?? "No live actions yet";
   const feedMeta = feed[0]?.meta ?? "The feed will populate once joins, burns, and settlements hit the contract.";
+
   const moveDisabled = !ARENA_ADDRESS || !isConnected || isWrongNetwork || isPending || !userActive;
   const sabotageDisabled = moveDisabled || !target.trim();
   const joinDisabled = !ARENA_ADDRESS || !isConnected || isWrongNetwork || isPending || !entryFee || joinBlockedByPrizeSeed || userActive;
   const claimDisabled = !ARENA_ADDRESS || !isConnected || isWrongNetwork || isPending || (userPendingEth === 0n && userPendingNara === 0n);
-  const topClockLabel = isOverdrive ? "Overdrive live" : formatCountdown(nextCull);
+  const sponsorDisabled = !ARENA_ADDRESS || !isConnected || isWrongNetwork || isPending || lockFee === undefined;
+  const flushDisabled = !ARENA_ADDRESS || pendingRewardEth === 0n || isPending || isWrongNetwork;
+  const txBtnClass = isPending ? "is-pending" : isSuccess ? "is-success" : "";
+
+  // ── Effects ─────────────────────────────────────────────────────────────────
+
+  useEffect(() => {
+    fetch(SNAPSHOT_URL)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => setSnapshot(data))
+      .catch(() => setSnapshot(null));
+  }, []);
+
+  useEffect(() => {
+    if (!address) { setBoardClaim(null); return; }
+    const lower = normalizeAddress(address);
+    fetch(BOARD_API_URL)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data: BoardResponse | null) => {
+        if (!data || !lower) { setBoardClaim(null); return; }
+        const claim = data.slots.find((slot) => normalizeAddress(slot.claim?.wallet) === lower)?.claim ?? null;
+        setBoardClaim(claim);
+      })
+      .catch(() => setBoardClaim(null));
+  }, [address]);
+
+  useEffect(() => {
+    const client = publicClient!;
+    if (!ARENA_ADDRESS || !client) return;
+    let active = true;
+    async function loadFeed() {
+      const blockNumber = await client.getBlockNumber();
+      const fromBlock = blockNumber > 5000n ? blockNumber - 5000n : 0n;
+      const [joined, moved, sabotaged, settled] = await Promise.all([
+        client.getLogs({ address: ARENA_ADDRESS, event: joinedEvent, fromBlock }),
+        client.getLogs({ address: ARENA_ADDRESS, event: forwardEvent, fromBlock }),
+        client.getLogs({ address: ARENA_ADDRESS, event: sabotageEvent, fromBlock }),
+        client.getLogs({ address: ARENA_ADDRESS, event: epochSettledEvent, fromBlock }),
+      ]);
+      if (!active) return;
+      const items: FeedItem[] = [
+        ...joined.slice(-4).map((log, i) => ({
+          id: `j-${i}-${log.transactionHash}`,
+          label: "Joined",
+          meta: `${shortAddress(log.args.runner)} paid ${formatEntryLabel(log.args.entryFeeWei)}`,
+          type: "join" as const,
+        })),
+        ...moved.slice(-4).map((log, i) => ({
+          id: `f-${i}-${log.transactionHash}`,
+          label: "Move",
+          meta: `${shortAddress(log.args.runner)} burned ${formatToken(log.args.naraBurned)} NARA`,
+          type: "move" as const,
+        })),
+        ...sabotaged.slice(-4).map((log, i) => ({
+          id: `s-${i}-${log.transactionHash}`,
+          label: "Sabotage",
+          meta: `${shortAddress(log.args.attacker)} hit ${shortAddress(log.args.target)}`,
+          type: "sabotage" as const,
+        })),
+        ...settled.slice(-2).map((log, i) => ({
+          id: `e-${i}-${log.transactionHash}`,
+          label: "Epoch settled",
+          meta: `${shortAddress(log.args.winner)} took ${formatEthValue(log.args.winnerAmountEth)} ETH + ${formatToken(log.args.winnerAmountNara)} NARA`,
+          type: "epoch" as const,
+        })),
+      ];
+      setFeed(items.reverse().slice(0, 8));
+    }
+    loadFeed().catch(() => setFeed([]));
+    return () => { active = false; };
+  }, [publicClient, isSuccess, feedTick]);
+
+  useEffect(() => {
+    const id = setInterval(() => setFeedTick((t) => t + 1), 30_000);
+    return () => clearInterval(id);
+  }, []);
+
+  useEffect(() => {
+    if (isPending) setStatusText("Waiting for wallet confirmation...");
+    else if (isConfirming) setStatusText("Transaction submitted. Waiting for Base confirmation...");
+    else if (isSuccess) { setStatusText("Transaction confirmed."); refetch(); }
+  }, [isPending, isConfirming, isSuccess, refetch]);
+
+  // ── Actions ─────────────────────────────────────────────────────────────────
+
+  function sendJoin() {
+    if (!ARENA_ADDRESS || !entryFee) return;
+    setStatusText("");
+    writeContract({ address: ARENA_ADDRESS, abi: arenaAbi, functionName: "join", value: entryFee });
+  }
+
+  async function ensureNaraAllowance(requiredAmount: bigint) {
+    if (!address || !publicClient) return;
+    const current = await publicClient.readContract({
+      address: NARA_TOKEN_ADDRESS,
+      abi: naraTokenAbi,
+      functionName: "allowance",
+      args: [address, ARENA_ADDRESS],
+    });
+    if ((current as bigint) >= requiredAmount) return;
+    setStatusText("Approving NARA — confirm in wallet...");
+    const approveHash = await writeContractAsync({
+      address: NARA_TOKEN_ADDRESS,
+      abi: naraTokenAbi,
+      functionName: "approve",
+      args: [ARENA_ADDRESS, BigInt("0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff")],
+    });
+    setStatusText("Waiting for approval confirmation...");
+    await publicClient.waitForTransactionReceipt({ hash: approveHash });
+    setStatusText("");
+  }
+
+  async function sendMove(amount: bigint) {
+    if (!ARENA_ADDRESS) return;
+    try {
+      await ensureNaraAllowance(amount);
+      writeContract({ address: ARENA_ADDRESS, abi: arenaAbi, functionName: "move", args: [amount] });
+    } catch {
+      setStatusText("Move failed. Check your NARA balance.");
+    }
+  }
+
+  async function sendSabotage(amount: bigint) {
+    const parsedTarget = parseTargetValue(target);
+    if (!ARENA_ADDRESS || !parsedTarget) { setStatusText("Enter a valid target address for sabotage."); return; }
+    try {
+      await ensureNaraAllowance(amount);
+      writeContract({ address: ARENA_ADDRESS, abi: arenaAbi, functionName: "sabotage", args: [parsedTarget, amount] });
+    } catch {
+      setStatusText("Sabotage failed. Check your NARA balance.");
+    }
+  }
+
+  function sendClaim() {
+    if (!ARENA_ADDRESS) return;
+    setStatusText("");
+    writeContract({ address: ARENA_ADDRESS, abi: arenaAbi, functionName: "claim" });
+  }
+
+  async function sendSponsorDeposit() {
+    if (!ARENA_ADDRESS || lockFee === undefined) return;
+    try {
+      const amount = parseSponsorAmount(sponsorAmount);
+      const duration = parseSponsorDuration(sponsorDuration);
+      await ensureNaraAllowance(amount);
+      writeContract({ address: ARENA_ADDRESS, abi: arenaAbi, functionName: "sponsorDeposit", args: [amount, duration], value: lockFee });
+    } catch {
+      setStatusText("Transaction failed. Check your NARA balance and try again.");
+    }
+  }
+
+  function sendFlush() {
+    if (!ARENA_ADDRESS) return;
+    setStatusText("");
+    writeContract({ address: ARENA_ADDRESS, abi: arenaAbi, functionName: "flushRewardEth" });
+  }
+
+  // ── Render ──────────────────────────────────────────────────────────────────
 
   return (
     <main className="arena-shell">
+      {/* ── Header ── */}
       <header className="arena-topbar">
         <div className="arena-brand">
           <p className="eyebrow">NARA / Arena Run</p>
           <h1>NARA Arena</h1>
-          <p className="arena-subcopy">Burn NARA to move. Pay ETH to enter. Sponsors seed the purse. Locker rewards route out of every join.</p>
+          <p className="arena-subcopy">
+            Burn NARA to move. Pay ETH to enter. Sponsors seed the purse. Locker rewards route out of every join.
+          </p>
         </div>
         <div className="arena-topbar-side">
           <div className="meta-strip">
@@ -430,271 +504,196 @@ export default function App() {
         </div>
       </header>
 
+      {/* ── Metric strip ── */}
       <section className="metric-grid">
-        <MetricCard label="Prize" value={`${formatEthValue(headlineEth)} ETH + ${formatToken(headlineNara)} NARA`} hint={`${harvestableSponsors.toString()} harvestable sponsors`} />
-        <MetricCard label="Race clock" value={topClockLabel} hint={`epoch ${formatCountdown(nextEpoch)}`} />
-        <MetricCard label="Your lane" value={userActive ? raceMeter : "watching"} hint={`heat ${userHeat} � lane ${runnerLaneIndex > 0 ? runnerLaneIndex : 0}`} />
-        <MetricCard label="Locker flow" value={`${formatEthValue(totalRewardsForwarded)} ETH`} hint={`${formatEthValue(pendingRewardEth)} ETH queued`} />
+        <MetricCard
+          className="card-prize"
+          label="Prize Pool"
+          value={
+            <>
+              <span className="prize-usd-total">
+                {formatUsd(
+                  (Number(headlineEth) / 1e18) * (prices.eth ?? 0) +
+                  (Number(headlineNara) / 1e18) * (prices.nara ?? 0)
+                ) ?? "—"}
+              </span>
+              <span className="prize-token-row">
+                <span className="prize-eth">{formatEthValue(headlineEth)}<em>ETH</em></span>
+                <span className="prize-plus">+</span>
+                <span className="prize-nara">{formatToken(headlineNara)}<em>NARA</em></span>
+              </span>
+            </>
+          }
+          hint={`${harvestableSponsors.toString()} harvestable sponsor${harvestableSponsors === 1n ? "" : "s"}`}
+          loading={!arenaReads}
+        />
+        <MetricCard
+          className="card-clock"
+          label="Race clock"
+          value={<LiveCountdown value={nextCull} />}
+          hint={<>epoch <LiveCountdown value={nextEpoch} /></>}
+          loading={!arenaReads}
+        />
+        <MetricCard
+          label="Your lane"
+          value={userActive ? raceMeter : "watching"}
+          hint={`heat ${userHeat} · lane ${runnerLaneIndex > 0 ? runnerLaneIndex : 0}`}
+          loading={!arenaReads}
+        />
+        <MetricCard
+          label="Locker flow"
+          value={`${formatEthValue(totalRewardsForwarded)} ETH`}
+          hint={prices.eth
+            ? `${formatEthValue(pendingRewardEth)} ETH queued · ${ethToUsd(totalRewardsForwarded, prices.eth) ?? ""}`
+            : `${formatEthValue(pendingRewardEth)} ETH queued`}
+          loading={!arenaReads}
+        />
       </section>
 
+      {/* ── Live feed headline ── */}
       <section className="feed-strip">
         <strong>{feedHeadline}</strong>
         <span>{feedMeta}</span>
       </section>
 
-      {!ARENA_ADDRESS ? (
+      {/* ── Status alerts ── */}
+      {!ARENA_ADDRESS && (
         <StatusStrip tone="warning" title="Arena address missing" body="Set VITE_ARENA_ADDRESS to enable the live contract view." />
-      ) : null}
-      {isWrongNetwork ? (
+      )}
+      {isWrongNetwork && (
         <StatusStrip tone="warning" title="Wrong network" body={`Switch your wallet to ${APP_CHAIN_NAME} before using arena actions.`} />
-      ) : null}
-      {statusText ? <StatusStrip tone="info" title="Transaction status" body={statusText} /> : null}
-      {joinBlockedByPrizeSeed ? (
+      )}
+      {statusText && <StatusStrip tone="info" title="Transaction status" body={statusText} />}
+      {joinBlockedByPrizeSeed && (
         <StatusStrip tone="warning" title="Prize not seeded" body="The sponsor lane must be funded before players can join." />
-      ) : null}
+      )}
 
+      {/* ── Main grid ── */}
       <section className="arena-main-grid">
         <section className="arena-column main-column">
+
+          {/* Race card */}
           <article className="arena-card race-card">
-            <div className="section-head">
-              <div>
-                <span>race</span>
-                <strong>{userActive ? `${boardAlias} on track` : "ready to enter"}</strong>
-              </div>
-              <div className="pill-row">
-                <span className={`state-pill ${isOverdrive ? "hot" : ""}`}>{isOverdrive ? "overdrive" : "standard"}</span>
-                <span className="state-pill">{activeRunnerCount.toString()} runners</span>
-              </div>
-            </div>
-
-            <div className="track-panel">
-              <div className="track-scale">
-                {[0, 25, 50, 75, 100].map((mark) => (
-                  <span key={mark} style={{ left: `${mark}%` }}>{mark}</span>
-                ))}
-              </div>
-              <div className="track-bar">
-                <div className="track-fill" style={{ width: `${raceProgress}%` }} />
-                <div className="track-marker" style={{ left: `${raceProgress}%` }}>
-                  <strong>{userActive ? boardAlias : "YOU"}</strong>
-                </div>
-              </div>
-              <div className="race-stats-row">
-                <div><span>position</span><strong>{raceMeter}</strong></div>
-                <div><span>burn rank</span><strong>R{burnRank}</strong></div>
-                <div><span>board</span><strong>{boardStatus}</strong></div>
-              </div>
-            </div>
-
-            <div className="play-grid compact">
-              <div className="play-block join-block">
-                <div className="block-head">
-                  <span>enter</span>
-                  <strong>{formatEntryLabel(entryFee)}</strong>
-                </div>
-                <p>Join once, then burn NARA to move or sabotage.</p>
-                <button className="primary-button" disabled={joinDisabled} onClick={sendJoin}>
-                  Join for {formatEntryLabel(entryFee)}
-                </button>
-              </div>
-
-              <div className="play-block">
-                <div className="block-head">
-                  <span>move</span>
-                  <strong>small burns</strong>
-                </div>
-                <div className="chip-grid triple">
-                  {ACTION_PRESETS.move.map((preset) => (
-                    <ActionCard
-                      key={preset.label}
-                      label={preset.label}
-                      amount={preset.amount}
-                      disabled={moveDisabled}
-                      onClick={() => sendMove(preset.amount)}
-                    />
-                  ))}
-                </div>
-              </div>
-
-              <div className="play-block sabotage-block">
-                <div className="block-head">
-                  <span>sabotage</span>
-                  <strong>targeted burn</strong>
-                </div>
-                <input
-                  className="compact-input"
-                  value={target}
-                  onChange={(event) => setTarget(event.target.value)}
-                  placeholder="0x... runner address"
-                />
-                <div className="chip-grid double">
-                  {ACTION_PRESETS.sabotage.map((preset) => (
-                    <ActionCard
-                      key={preset.label}
-                      label={preset.label}
-                      amount={preset.amount}
-                      tone="danger"
-                      disabled={moveDisabled}
-                      onClick={() => sendSabotage(preset.amount)}
-                    />
-                  ))}
-                </div>
-                {target.trim() && sabotageDisabled ? <small className="inline-note">Target set, but only active runners can sabotage.</small> : null}
-              </div>
-            </div>
-
-            <div className="claim-row">
-              <div>
-                <span>unclaimed</span>
-                <strong>{formatEthValue(userPendingEth)} ETH + {formatToken(userPendingNara)} NARA</strong>
-              </div>
-              <button className="secondary-button" disabled={claimDisabled} onClick={sendClaim}>Claim</button>
-            </div>
+            <RaceTrack
+              raceProgress={raceProgress}
+              raceMeter={raceMeter}
+              userActive={userActive}
+              boardAlias={boardAlias}
+              burnRank={burnRank}
+              boardStatus={boardStatus}
+              isOverdrive={isOverdrive}
+              activeRunnerCount={activeRunnerCount}
+            />
+            <PlayControls
+              entryFee={entryFee}
+              joinDisabled={joinDisabled}
+              moveDisabled={moveDisabled}
+              sabotageDisabled={sabotageDisabled}
+              claimDisabled={claimDisabled}
+              target={target}
+              onTargetChange={setTarget}
+              onJoin={sendJoin}
+              onMove={sendMove}
+              onSabotage={sendSabotage}
+              onClaim={sendClaim}
+              txBtnClass={txBtnClass}
+              isPending={isPending}
+              isConfirming={isConfirming}
+              userPendingEth={userPendingEth}
+              userPendingNara={userPendingNara}
+              naraPriceUsd={prices.nara}
+              ethPriceUsd={prices.eth}
+            />
           </article>
 
-          <article className="arena-card info-card">
-            <div className="section-head compact-head">
-              <div>
-                <span>prize + clock</span>
-                <strong>live totals</strong>
-              </div>
-            </div>
-            <div className="data-grid two-col compact-data-grid">
-              <div className="data-list">
-                <div className="data-row"><span>harvested</span><strong>{formatEthValue(harvestedEth)} ETH / {formatToken(harvestedNara)} NARA</strong></div>
-                <div className="data-row"><span>accruing</span><strong>{formatEthValue(unharvestedEth)} ETH / {formatToken(unharvestedNara)} NARA</strong></div>
-                <div className="data-row"><span>pool live</span><strong>{formatEthValue(prizePoolEth)} ETH / {formatToken(prizePoolNara)} NARA</strong></div>
-                <div className="data-row"><span>sponsors</span><strong>{sponsorCount.toString()}</strong></div>
-              </div>
-              <div className="data-list">
-                <div className="data-row"><span>next cull</span><strong>{formatCountdown(nextCull)}</strong></div>
-                <div className="data-row"><span>next epoch</span><strong>{formatCountdown(nextEpoch)}</strong></div>
-                <div className="data-row"><span>overdrive</span><strong>{overdriveWindow ? `${formatClock(overdriveWindow[0])} - ${formatClock(overdriveWindow[1])}` : "-"}</strong></div>
-                <div className="data-row"><span>total burn</span><strong>{formatToken(totalBurned)} NARA</strong></div>
-              </div>
-            </div>
-          </article>
+          <PrizeClock
+            harvestedEth={harvestedEth}
+            harvestedNara={harvestedNara}
+            unharvestedEth={unharvestedEth}
+            unharvestedNara={unharvestedNara}
+            prizePoolEth={prizePoolEth}
+            prizePoolNara={prizePoolNara}
+            sponsorCount={sponsorCount}
+            nextCull={nextCull}
+            nextEpoch={nextEpoch}
+            overdriveWindow={overdriveWindow}
+            totalBurned={totalBurned}
+            naraPriceUsd={prices.nara}
+            ethPriceUsd={prices.eth}
+          />
 
           <div className="bottom-grid">
-            <article className="arena-card feed-card">
-              <div className="section-head compact-head">
-                <div>
-                  <span>feed</span>
-                  <strong>recent actions</strong>
-                </div>
-              </div>
-              <div className="feed-list compact-list">
-                {feed.length ? feed.map((item) => (
-                  <div key={item.id} className="feed-item">
-                    <strong>{item.label}</strong>
-                    <span>{item.meta}</span>
-                  </div>
-                )) : <div className="empty-slot">Recent joins, burns, and settlements will show here.</div>}
-              </div>
-            </article>
-
-            <article className="arena-card leaderboard-card">
-              <div className="section-head compact-head">
-                <div>
-                  <span>snapshot</span>
-                  <strong>{snapshot?.generatedAt ? new Date(snapshot.generatedAt).toLocaleString() : "No snapshot"}</strong>
-                </div>
-              </div>
-              <div className="leaderboard-matrix compact-matrix">
-                <Leaderboard title="Burners" entries={snapshot?.leaderboards.topLifetimeBurners} field="lifetimeBurned" />
-                <Leaderboard title="Winners" entries={snapshot?.leaderboards.topWinners} field="lifetimeWins" />
-                <Leaderboard title="Top 5" entries={snapshot?.leaderboards.topTop5} field="lifetimeEpochTop5" />
-                <Leaderboard title="Survivors" entries={snapshot?.leaderboards.topCullSurvivors} field="lifetimeCullSurvivals" />
-              </div>
-            </article>
+            <FeedCard feed={feed} />
+            <LeaderboardCard snapshot={snapshot} />
           </div>
         </section>
 
         <aside className="arena-column side-column">
-          <article className="arena-card sponsor-card">
-            <div className="section-head compact-head">
-              <div>
-                <span>sponsor lane</span>
-                <strong>{sponsorCount.toString()} live</strong>
-              </div>
-            </div>
-            <div className="data-list compact-gap">
-              <div className="data-row"><span>TVL</span><strong>{formatToken(sponsorTvl)} NARA</strong></div>
-              <div className="data-row"><span>lock fee</span><strong>{formatEthValue(lockFee)} ETH</strong></div>
-              <div className="data-row"><span>source</span><strong>engine clone rewards</strong></div>
-              <div className="data-row"><span>entry gate</span><strong>{joinBlockedByPrizeSeed ? "closed" : "open"}</strong></div>
-            </div>
-            <div className="form-stack compact-form-stack">
-              <label className="compact-field">
-                <span>amount</span>
-                <input className="compact-input" value={sponsorAmount} onChange={(event) => setSponsorAmount(event.target.value)} placeholder="1000" />
-              </label>
-              <label className="compact-field">
-                <span>duration</span>
-                <input className="compact-input" value={sponsorDuration} onChange={(event) => setSponsorDuration(event.target.value)} placeholder="96" />
-              </label>
-              <button
-                className="secondary-button full-width"
-                disabled={!ARENA_ADDRESS || !isConnected || isWrongNetwork || isPending || lockFee === undefined}
-                onClick={sendSponsorDeposit}
-              >
-                Fund sponsor lane
-              </button>
-            </div>
-          </article>
-
-          <article className="arena-card identity-card">
-            <div className="section-head compact-head">
-              <div>
-                <span>identity</span>
-                <strong>{userActive ? "runner" : "spectator"}</strong>
-              </div>
-            </div>
-            <div className="identity-panel">
-              <div className="identity-mark">R{burnRank}</div>
-              <div className="identity-copy">
-                <strong>{boardAlias}</strong>
-                <span>{boardStatus}</span>
-              </div>
-            </div>
-            <div className="data-list compact-gap">
-              <div className="data-row"><span>your burn</span><strong>{formatToken(userBurned)} NARA</strong></div>
-              <div className="data-row"><span>entries</span><strong>{formatEthValue(totalEntries)} ETH</strong></div>
-              <div className="data-row"><span>locker benefit</span><strong>{formatEthValue(totalRewardsForwarded)} ETH</strong></div>
-            </div>
-            <button
-              className="ghost-button full-width"
-              disabled={!ARENA_ADDRESS || pendingRewardEth === 0n || isPending || isWrongNetwork}
-              onClick={sendFlush}
-            >
-              Flush queued reward ETH
-            </button>
-          </article>
+          <SponsorCard
+            sponsorCount={sponsorCount}
+            sponsorTvl={sponsorTvl}
+            lockFee={lockFee}
+            joinBlockedByPrizeSeed={joinBlockedByPrizeSeed}
+            sponsorAmount={sponsorAmount}
+            sponsorDuration={sponsorDuration}
+            onAmountChange={setSponsorAmount}
+            onDurationChange={setSponsorDuration}
+            onSubmit={sendSponsorDeposit}
+            disabled={sponsorDisabled}
+            naraPriceUsd={prices.nara}
+            ethPriceUsd={prices.eth}
+          />
+          <IdentityCard
+            burnRank={burnRank}
+            boardAlias={boardAlias}
+            boardStatus={boardStatus}
+            userActive={userActive}
+            userBurned={userBurned}
+            totalEntries={totalEntries}
+            totalRewardsForwarded={totalRewardsForwarded}
+            pendingRewardEth={pendingRewardEth}
+            onFlush={sendFlush}
+            flushDisabled={flushDisabled}
+            naraPriceUsd={prices.nara}
+            ethPriceUsd={prices.eth}
+          />
         </aside>
       </section>
-    </main>
-  );
-}
 
-function Leaderboard({ title, entries, field }: { title: string; entries?: SnapshotEntry[]; field: keyof SnapshotEntry }) {
-  return (
-    <section className="leaderboard-module compact-module">
-      <header className="leaderboard-head compact-leaderboard-head">
-        <span>{title}</span>
-      </header>
-      <div className="leaderboard-list compact-leaderboard-list">
-        {entries && entries.length ? entries.slice(0, 5).map((entry, index) => {
-          const raw = entry[field];
-          const display = typeof raw === "string" && /^\d+$/.test(raw) ? Number(raw).toLocaleString() : String(raw);
-          return (
-            <div key={`${title}-${entry.player}`} className="leaderboard-row compact-row">
-              <span>{index + 1}</span>
-              <strong>{shortAddress(entry.player)}</strong>
-              <em>{display}</em>
-            </div>
-          );
-        }) : <div className="empty-slot">Snapshot not available yet.</div>}
-      </div>
-    </section>
+      {/* ── Footer ── */}
+      <footer className="arena-footer">
+        <div className="arena-trust-bar">
+          <a className="arena-trust-item" href="https://basescan.org/token/0xE444de61752bD13D1D37Ee59c31ef4e489bd727C" target="_blank" rel="noopener noreferrer">
+            <span className="arena-trust-dot" />
+            <span className="arena-trust-label">NARA Token</span>
+            <span className="arena-trust-addr">0xE444...727C</span>
+          </a>
+          <a className="arena-trust-item" href={`https://basescan.org/address/${ARENA_ADDRESS}`} target="_blank" rel="noopener noreferrer">
+            <span className="arena-trust-dot" style={{ background: "var(--gold)" }} />
+            <span className="arena-trust-label">Arena</span>
+            <span className="arena-trust-addr">{`${ARENA_ADDRESS.slice(0, 6)}...${ARENA_ADDRESS.slice(-4)}`}</span>
+          </a>
+          <a className="arena-trust-item" href="https://basescan.org/token/0xE444de61752bD13D1D37Ee59c31ef4e489bd727C#readContract" target="_blank" rel="noopener noreferrer">
+            <span className="arena-trust-dot" />
+            <span className="arena-trust-label">Engine</span>
+            <span className="arena-trust-addr">profit loop</span>
+          </a>
+        </div>
+        <div className="arena-footer-row">
+          <a href="https://x.com/NARA_protocol" target="_blank" rel="noopener noreferrer" className="arena-footer-link">X</a>
+          <a href="https://warpcast.com/naraprotocol" target="_blank" rel="noopener noreferrer" className="arena-footer-link">Farcaster</a>
+          <a href="https://naraprotocol.io" target="_blank" rel="noopener noreferrer" className="arena-footer-link">naraprotocol.io</a>
+          <span className="arena-footer-sep" />
+          <a href="https://base.org" target="_blank" rel="noopener noreferrer" className="arena-footer-built">
+            Built with <span className="arena-heart">♥</span> on Base
+          </a>
+          <span className="arena-footer-sep" />
+          <span className="arena-footer-copy">
+            <span className="arena-copyright-mark" aria-hidden="true">C</span>
+            NARA 2026 · made with Claude
+          </span>
+        </div>
+      </footer>
+    </main>
   );
 }

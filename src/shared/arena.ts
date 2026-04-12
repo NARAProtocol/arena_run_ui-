@@ -1,6 +1,12 @@
 import { formatEther, formatUnits, isAddress, parseEther, parseUnits } from "viem";
 
 export const LIVE_ARENA_ADDRESS = "0x6a1d3f01EFB35F3A8d5d6B3101f2764Bdf47cf3b" as const;
+export const NARA_TOKEN_ADDRESS = "0xE444de61752bD13D1D37Ee59c31ef4e489bd727C" as const;
+
+export const naraTokenAbi = [
+  { type: "function", stateMutability: "view", name: "allowance", inputs: [{ name: "owner", type: "address" }, { name: "spender", type: "address" }], outputs: [{ name: "", type: "uint256" }] },
+  { type: "function", stateMutability: "nonpayable", name: "approve", inputs: [{ name: "spender", type: "address" }, { name: "amount", type: "uint256" }], outputs: [{ name: "", type: "bool" }] },
+] as const;
 
 export const ARENA_ADDRESS = import.meta.env.VITE_ARENA_ADDRESS && isAddress(import.meta.env.VITE_ARENA_ADDRESS)
   ? import.meta.env.VITE_ARENA_ADDRESS
@@ -52,6 +58,50 @@ export const arenaAbi = [
   { type: "event", name: "EpochSettled", inputs: [{ indexed: true, name: "epoch", type: "uint64" }, { indexed: false, name: "distributedEth", type: "uint256" }, { indexed: false, name: "distributedNara", type: "uint256" }, { indexed: false, name: "winner", type: "address" }, { indexed: false, name: "winnerAmountEth", type: "uint256" }, { indexed: false, name: "winnerAmountNara", type: "uint256" }, { indexed: false, name: "topFiveAmountEth", type: "uint256" }, { indexed: false, name: "topFiveAmountNara", type: "uint256" }], anonymous: false },
 ] as const;
 
+export type FeedItem = {
+  id: string;
+  label: string;
+  meta: string;
+  type: "join" | "move" | "sabotage" | "epoch";
+};
+
+export type SnapshotEntry = {
+  player: string;
+  burnRank: number;
+  lifetimeBurned: string;
+  lifetimeWins: string;
+  lifetimeEpochTop5: string;
+  lifetimeCullSurvivals: string;
+};
+
+export type SnapshotData = {
+  generatedAt: string;
+  leaderboards: {
+    topLifetimeBurners: SnapshotEntry[];
+    topWinners: SnapshotEntry[];
+    topTop5: SnapshotEntry[];
+    topCullSurvivors: SnapshotEntry[];
+  };
+};
+
+export const TRACK_LENGTH = 100;
+
+export function shortAddress(value?: string) {
+  return value ? `${value.slice(0, 6)}...${value.slice(-4)}` : "-";
+}
+
+export function progressPercent(position: bigint) {
+  const units = Number(position) / 1e18;
+  if (!Number.isFinite(units) || units <= 0) return 0;
+  return Math.max(0, Math.min((units / TRACK_LENGTH) * 100, 100));
+}
+
+export function trackMeter(position: bigint) {
+  const units = Number(position) / 1e18;
+  if (!Number.isFinite(units) || units <= 0) return "0.0 / 100";
+  return `${units.toFixed(1)} / ${TRACK_LENGTH}`;
+}
+
 export function formatToken(value?: bigint | null, digits = 2) {
   if (value === undefined || value === null) return "-";
   return Intl.NumberFormat("en-US", { maximumFractionDigits: digits }).format(Number(formatUnits(value, 18)));
@@ -78,6 +128,23 @@ export function formatCountdown(unixSeconds?: bigint | number | null) {
   if (hours > 0) return `${hours}h ${minutes}m ${seconds}s`;
   if (minutes > 0) return `${minutes}m ${seconds}s`;
   return `${seconds}s`;
+}
+
+export function formatUsd(usd: number | null): string | null {
+  if (usd == null || !Number.isFinite(usd)) return null;
+  const abs = Math.abs(usd);
+  const maxFrac = abs === 0 ? 2 : abs >= 1000 ? 0 : abs >= 100 ? 1 : abs >= 1 ? 2 : abs >= 0.1 ? 2 : 3;
+  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: maxFrac }).format(usd);
+}
+
+export function naraToUsd(amount: bigint, priceUsd: number | null): string | null {
+  if (priceUsd == null) return null;
+  return formatUsd((Number(amount) / 1e18) * priceUsd);
+}
+
+export function ethToUsd(amount: bigint, priceUsd: number | null): string | null {
+  if (priceUsd == null) return null;
+  return formatUsd((Number(amount) / 1e18) * priceUsd);
 }
 
 export function parseSponsorAmount(value: string) {
