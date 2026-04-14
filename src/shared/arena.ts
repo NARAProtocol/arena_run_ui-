@@ -118,7 +118,20 @@ export function trackMeter(position: bigint) {
 
 export function formatToken(value?: bigint | null, digits = 2) {
   if (value === undefined || value === null) return "-";
-  return Intl.NumberFormat("en-US", { maximumFractionDigits: digits }).format(Number(formatUnits(value, 18)));
+  const amount = Number(formatUnits(value, 18));
+  if (!Number.isFinite(amount)) return "-";
+  if (amount === 0) return "0";
+
+  const abs = Math.abs(amount);
+  const maximumFractionDigits = abs >= 1000
+    ? 0
+    : abs >= 1
+      ? digits
+      : abs >= 0.01
+        ? Math.max(digits + 2, 4)
+        : Math.max(digits + 4, 6);
+
+  return Intl.NumberFormat("en-US", { maximumFractionDigits }).format(amount);
 }
 
 export function formatTokenInputValue(value?: bigint | null) {

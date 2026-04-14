@@ -379,7 +379,8 @@ export default function App() {
 
   // ── Derived UI state ────────────────────────────────────────────────────────
 
-  const joinBlockedByPrizeSeed = sponsorCount === 0n || (headlineEth === 0n && headlineNara === 0n);
+  const joinBlockedByPrizeSeed = sponsorCount === 0n;
+  const sponsorYieldPending = sponsorCount > 0n && headlineEth === 0n && headlineNara === 0n;
   const isOverdrive = Boolean(
     overdriveWindow &&
       Date.now() >= Number(overdriveWindow[0]) * 1000 &&
@@ -404,6 +405,13 @@ export default function App() {
 
   const feedHeadline = feed[0]?.label ?? "No live actions yet";
   const feedMeta = feed[0]?.meta ?? "The feed will populate once joins, burns, and settlements hit the contract.";
+  const prizePoolHint = sponsorYieldPending
+    ? `${sponsorCount.toString()} sponsor live - yield pending accrual`
+    : harvestableSponsors > 0n
+      ? `${harvestableSponsors.toString()} harvestable sponsor${harvestableSponsors === 1n ? "" : "s"}`
+      : sponsorCount > 0n
+        ? `${sponsorCount.toString()} sponsor live - yield compounding`
+        : "Awaiting first sponsor";
 
   const moveDisabled = !ARENA_ADDRESS || !isConnected || isWrongNetwork || isPending || !userActive;
   const sabotageDisabled = moveDisabled || !target.trim();
@@ -709,7 +717,7 @@ export default function App() {
               </span>
             </>
           }
-          hint={`${harvestableSponsors.toString()} harvestable sponsor${harvestableSponsors === 1n ? "" : "s"}`}
+          hint={prizePoolHint}
           loading={!arenaReads}
         />
         <MetricCard
@@ -751,6 +759,13 @@ export default function App() {
       {statusText && <StatusStrip tone="info" title="Transaction status" body={statusText} />}
       {joinBlockedByPrizeSeed && (
         <StatusStrip tone="warning" title="Prize not seeded" body="The sponsor lane must be funded before players can join." />
+      )}
+      {sponsorYieldPending && (
+        <StatusStrip
+          tone="info"
+          title="Yield warming up"
+          body="Sponsor principal stays locked as TVL. Prize totals remain at zero until the lock accrues claimable yield."
+        />
       )}
       {engineSyncRequired && (
         <StatusStrip
@@ -808,6 +823,7 @@ export default function App() {
             headlineEth={headlineEth}
             headlineNara={headlineNara}
             sponsorCount={sponsorCount}
+            sponsorYieldPending={sponsorYieldPending}
             nextCull={nextCull}
             nextEpoch={nextEpoch}
             overdriveWindow={overdriveWindow}

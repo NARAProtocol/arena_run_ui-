@@ -9,6 +9,7 @@ type PrizeClockProps = {
   headlineEth: bigint;
   headlineNara: bigint;
   sponsorCount: bigint;
+  sponsorYieldPending: boolean;
   nextCull: bigint | undefined;
   nextEpoch: bigint | undefined;
   overdriveWindow: readonly bigint[] | undefined;
@@ -25,6 +26,7 @@ export function PrizeClock({
   headlineEth,
   headlineNara,
   sponsorCount,
+  sponsorYieldPending,
   nextCull,
   nextEpoch,
   overdriveWindow,
@@ -110,8 +112,13 @@ export function PrizeClock({
           </div>
         </div>
       </div>
+      {sponsorYieldPending && (
+        <small className="inline-note">
+          Sponsor principal is locked as TVL. Prize totals stay at zero until claimable yield accrues.
+        </small>
+      )}
       <small className="inline-note prize-source-note">
-        Sponsor lock rewards harvest into the prize pool. Runner entry ETH routes to engine lockers.
+        Locked sponsor principal is not prize pool capital. Sponsor lock rewards harvest into the prize pool. Runner entry ETH routes to engine lockers.
       </small>
     </article>
   );
