@@ -39,9 +39,18 @@ Optional:
 
 ```bash
 VITE_WALLETCONNECT_PROJECT_ID=your_project_id
-VITE_ARENA_SNAPSHOT_URL=/arena-leaderboard.snapshot.json
+VITE_BASE_RPC_URL=https://base-mainnet.g.alchemy.com/v2/YOUR_KEY
+VITE_ARENA_SNAPSHOT_URL=/arena/arena-leaderboard.snapshot.json
 VITE_BOARD_API_URL=https://www.naraprotocol.io/mine/api/board
+VITE_ETH_PRICE_USD=
+VITE_NARA_PRICE_USD=
 ```
+
+Notes:
+
+- `VITE_BASE_RPC_URL` should point at your paid Base RPC. If it is unset, wagmi falls back to the public Base transport.
+- `VITE_ARENA_SNAPSHOT_URL` defaults to the bundled `/arena/arena-leaderboard.snapshot.json` asset, so you only need to override it when hosting snapshots elsewhere.
+- `VITE_ETH_PRICE_USD` and `VITE_NARA_PRICE_USD` are optional manual price overrides. Leaving them blank disables USD conversion labels instead of making browser-side third-party API calls.
 
 ## Address Fallback
 

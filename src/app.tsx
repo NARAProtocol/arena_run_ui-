@@ -90,53 +90,16 @@ const epochSettledEvent = parseAbiItem("event EpochSettled(uint64 indexed epoch,
 
 // ─── Market prices hook ───────────────────────────────────────────────────────
 
-const NARA_ADDR = "0xe444de61752bd13d1d37ee59c31ef4e489bd727c";
-const WETH_ADDR = "0x4200000000000000000000000000000000000006";
-const GECKO_TOKEN = (addr: string) => `https://api.geckoterminal.com/api/v2/networks/base/tokens/${addr}`;
-const GECKO_POOLS  = (addr: string) => `https://api.geckoterminal.com/api/v2/networks/base/tokens/${addr}/pools?page=1`;
+function readUsdEnv(value?: string) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
 
 function useMarketPrices(): { nara: number | null; eth: number | null } {
-  const [prices, setPrices] = useState<{ nara: number | null; eth: number | null }>({ nara: null, eth: null });
-  useEffect(() => {
-    let active = true;
-    async function load() {
-      try {
-        // ETH price: token endpoint is reliable for WETH
-        const ethData = await fetch(GECKO_TOKEN(WETH_ADDR)).then((r) => r.json());
-        const eth = parseFloat(ethData?.data?.attributes?.price_usd);
-
-        // NARA price: token endpoint returns null (thin liquidity) — use pools instead
-        // Pick the pool with highest reserve to get the most accurate price
-        let nara: number | null = null;
-        const poolData = await fetch(GECKO_POOLS(NARA_ADDR)).then((r) => r.json());
-        const pools: Array<{ attributes: { base_token_price_usd: string; quote_token_price_usd: string; reserve_in_usd: string }; relationships: { base_token: { data: { id: string } } } }> = poolData?.data ?? [];
-        // Sort by reserve descending, take the most liquid pool
-        const sorted = [...pools].sort((a, b) =>
-          parseFloat(b.attributes?.reserve_in_usd ?? "0") - parseFloat(a.attributes?.reserve_in_usd ?? "0")
-        );
-        for (const pool of sorted) {
-          const isBase = pool.relationships?.base_token?.data?.id?.toLowerCase().includes(NARA_ADDR.toLowerCase());
-          const rawPrice = isBase
-            ? parseFloat(pool.attributes?.base_token_price_usd)
-            : parseFloat(pool.attributes?.quote_token_price_usd);
-          if (Number.isFinite(rawPrice) && rawPrice > 0) {
-            nara = rawPrice;
-            break;
-          }
-        }
-
-        if (!active) return;
-        setPrices({
-          nara,
-          eth: Number.isFinite(eth) && eth > 0 ? eth : null,
-        });
-      } catch { /* prices stay null */ }
-    }
-    load();
-    const id = setInterval(load, 60_000);
-    return () => { active = false; clearInterval(id); };
-  }, []);
-  return prices;
+  return {
+    nara: readUsdEnv(import.meta.env.VITE_NARA_PRICE_USD),
+    eth: readUsdEnv(import.meta.env.VITE_ETH_PRICE_USD),
+  };
 }
 
 // ─── Small UI components ──────────────────────────────────────────────────────

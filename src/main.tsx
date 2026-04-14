@@ -12,18 +12,25 @@ import { WALLET_PROJECT_ID, WALLETCONNECT_CONFIGURED } from "./shared/wallet";
 import "@rainbow-me/rainbowkit/styles.css";
 import "./styles.css";
 
+const baseRpcUrl = import.meta.env.VITE_BASE_RPC_URL || undefined;
+
 const config = WALLETCONNECT_CONFIGURED
   ? getDefaultConfig({
       appName: "NARA Arena",
       projectId: WALLET_PROJECT_ID,
       chains: [base],
+      transports: {
+        [base.id]: http(baseRpcUrl, { batch: { batchSize: 20, wait: 50 } }),
+      },
+      pollingInterval: 30_000,
     })
   : createConfig({
       chains: [base],
       connectors: [injected()],
       transports: {
-        [base.id]: http(),
+        [base.id]: http(baseRpcUrl, { batch: { batchSize: 20, wait: 50 } }),
       },
+      pollingInterval: 30_000,
     });
 
 const queryClient = new QueryClient();

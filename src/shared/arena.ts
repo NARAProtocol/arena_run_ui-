@@ -13,7 +13,12 @@ export const ARENA_ADDRESS = import.meta.env.VITE_ARENA_ADDRESS && isAddress(imp
   ? import.meta.env.VITE_ARENA_ADDRESS
   : LIVE_ARENA_ADDRESS;
 
-export const SNAPSHOT_URL = import.meta.env.VITE_ARENA_SNAPSHOT_URL || "/arena-leaderboard.snapshot.json";
+const rawSnapshotUrl = import.meta.env.VITE_ARENA_SNAPSHOT_URL?.trim();
+const defaultSnapshotUrl = `${import.meta.env.BASE_URL}arena-leaderboard.snapshot.json`;
+
+export const SNAPSHOT_URL = !rawSnapshotUrl || rawSnapshotUrl === "/arena-leaderboard.snapshot.json"
+  ? defaultSnapshotUrl
+  : rawSnapshotUrl;
 export const BOARD_API_URL = import.meta.env.VITE_BOARD_API_URL || "https://www.naraprotocol.io/mine/api/board";
 
 export const MIN_MOVE_BURN = parseUnits("2", 18);

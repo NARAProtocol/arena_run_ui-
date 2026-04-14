@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="NARA Arena">
+  <rect width="64" height="64" rx="14" fill="#f7f2e8"/>
+  <path d="M16 46V18h7l11 15V18h7v28h-7L23 31v15h-7Z" fill="#16120d"/>
+  <path d="M45 46 33 18h8l4.4 10.8L50 18h8L46 46h-1Z" fill="#d38c1e"/>
+</svg>
