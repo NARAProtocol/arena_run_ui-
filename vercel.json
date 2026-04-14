@@ -1,7 +1,6 @@
 {
   "buildCommand": "npm run build",
-  "outputDirectory": "dist/arena",
-  "framework": "vite",
+  "outputDirectory": "dist",
   "redirects": [
     {
       "source": "/",
