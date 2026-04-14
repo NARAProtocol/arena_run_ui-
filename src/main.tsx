@@ -2,24 +2,29 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { RainbowKitProvider, getDefaultConfig } from "@rainbow-me/rainbowkit";
-import { WagmiProvider } from "wagmi";
+import { createConfig, http, WagmiProvider } from "wagmi";
+import { injected } from "wagmi/connectors";
 import { base } from "wagmi/chains";
 
 import App from "./app";
+import { WALLET_PROJECT_ID, WALLETCONNECT_CONFIGURED } from "./shared/wallet";
 
 import "@rainbow-me/rainbowkit/styles.css";
 import "./styles.css";
 
-const projectId =
-  import.meta.env.VITE_RAINBOW_PROJECT_ID ||
-  import.meta.env.VITE_WALLETCONNECT_PROJECT_ID ||
-  "00000000000000000000000000000000";
-
-const config = getDefaultConfig({
-  appName: "NARA Arena",
-  projectId,
-  chains: [base],
-});
+const config = WALLETCONNECT_CONFIGURED
+  ? getDefaultConfig({
+      appName: "NARA Arena",
+      projectId: WALLET_PROJECT_ID,
+      chains: [base],
+    })
+  : createConfig({
+      chains: [base],
+      connectors: [injected()],
+      transports: {
+        [base.id]: http(),
+      },
+    });
 
 const queryClient = new QueryClient();
 

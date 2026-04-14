@@ -147,8 +147,14 @@ export function formatCountdown(unixSeconds?: bigint | number | null) {
 export function formatUsd(usd: number | null): string | null {
   if (usd == null || !Number.isFinite(usd)) return null;
   const abs = Math.abs(usd);
-  const maxFrac = abs === 0 ? 2 : abs >= 1000 ? 0 : abs >= 100 ? 1 : abs >= 1 ? 2 : abs >= 0.1 ? 2 : 3;
-  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: maxFrac }).format(usd);
+  const maximumFractionDigits = abs === 0 ? 2 : abs >= 1000 ? 0 : abs >= 100 ? 1 : abs >= 1 ? 2 : abs >= 0.1 ? 2 : 3;
+  const minimumFractionDigits = Math.min(2, maximumFractionDigits);
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits,
+    maximumFractionDigits,
+  }).format(usd);
 }
 
 export function naraToUsd(amount: bigint, priceUsd: number | null): string | null {
