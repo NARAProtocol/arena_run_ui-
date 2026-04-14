@@ -911,6 +911,8 @@ body::after {
 .compact-input::placeholder { color: rgba(122, 106, 78, 0.7); }
 
 .inline-note { display: block; margin-top: 8px; }
+.inline-note.error { color: var(--danger); }
+.prize-source-note { margin-top: 12px; }
 
 /* ─── Claim row ───────────────────────────────────────────── */
 
@@ -1160,6 +1162,32 @@ body::after {
   margin-top: 12px;
 }
 .compact-field { display: grid; gap: 6px; }
+.compact-field-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.field-action-button {
+  min-height: 24px;
+  padding: 0 10px;
+  border: 1px solid var(--line-mid);
+  border-radius: 999px;
+  background: rgba(255, 252, 240, 0.9);
+  color: var(--text);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+}
+.field-action-button:not(:disabled):hover {
+  background: #fffcf0;
+  border-color: var(--line-strong);
+}
+.field-action-button:disabled {
+  opacity: 0.36;
+  cursor: not-allowed;
+}
 
 /* ─── Identity panel ──────────────────────────────────────── */
 

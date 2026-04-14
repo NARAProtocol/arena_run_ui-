@@ -4,6 +4,7 @@ export const LIVE_ARENA_ADDRESS = "0x6a1d3f01EFB35F3A8d5d6B3101f2764Bdf47cf3b" a
 export const NARA_TOKEN_ADDRESS = "0xE444de61752bD13D1D37Ee59c31ef4e489bd727C" as const;
 
 export const naraTokenAbi = [
+  { type: "function", stateMutability: "view", name: "balanceOf", inputs: [{ name: "account", type: "address" }], outputs: [{ name: "", type: "uint256" }] },
   { type: "function", stateMutability: "view", name: "allowance", inputs: [{ name: "owner", type: "address" }, { name: "spender", type: "address" }], outputs: [{ name: "", type: "uint256" }] },
   { type: "function", stateMutability: "nonpayable", name: "approve", inputs: [{ name: "spender", type: "address" }, { name: "amount", type: "uint256" }], outputs: [{ name: "", type: "bool" }] },
 ] as const;
@@ -15,20 +16,28 @@ export const ARENA_ADDRESS = import.meta.env.VITE_ARENA_ADDRESS && isAddress(imp
 export const SNAPSHOT_URL = import.meta.env.VITE_ARENA_SNAPSHOT_URL || "/arena-leaderboard.snapshot.json";
 export const BOARD_API_URL = import.meta.env.VITE_BOARD_API_URL || "https://www.naraprotocol.io/mine/api/board";
 
+export const MIN_MOVE_BURN = parseUnits("2", 18);
+export const MAX_MOVE_BURN = parseUnits("30", 18);
+export const MIN_SABOTAGE_BURN = parseUnits("10", 18);
+export const MAX_SABOTAGE_BURN = parseUnits("30", 18);
+export const MIN_SPONSOR_DEPOSIT = parseUnits("1000", 18);
+export const MAX_SPONSOR_DEPOSIT = parseUnits("10000", 18);
+export const MIN_SPONSOR_DURATION = 96n;
+
 export const ACTION_PRESETS = {
   move: [
-    { label: "Dash", amount: parseUnits("2", 18) },
+    { label: "Dash", amount: MIN_MOVE_BURN },
     { label: "Charge", amount: parseUnits("10", 18) },
-    { label: "All-In", amount: parseUnits("30", 18) },
+    { label: "All-In", amount: MAX_MOVE_BURN },
   ],
   sabotage: [
-    { label: "Shove", amount: parseUnits("10", 18) },
-    { label: "Wreck", amount: parseUnits("30", 18) },
+    { label: "Shove", amount: MIN_SABOTAGE_BURN },
+    { label: "Wreck", amount: MAX_SABOTAGE_BURN },
   ],
 };
 
-export const DEFAULT_SPONSOR_AMOUNT = parseUnits("1000", 18);
-export const DEFAULT_SPONSOR_DURATION = 96n;
+export const DEFAULT_SPONSOR_AMOUNT = MIN_SPONSOR_DEPOSIT;
+export const DEFAULT_SPONSOR_DURATION = MIN_SPONSOR_DURATION;
 
 export const arenaAbi = [
   { type: "function", name: "currentEntryFee", stateMutability: "view", inputs: [], outputs: [{ type: "uint256" }] },
@@ -107,6 +116,11 @@ export function formatToken(value?: bigint | null, digits = 2) {
   return Intl.NumberFormat("en-US", { maximumFractionDigits: digits }).format(Number(formatUnits(value, 18)));
 }
 
+export function formatTokenInputValue(value?: bigint | null) {
+  if (value === undefined || value === null) return "";
+  return formatUnits(value, 18);
+}
+
 export function formatEthValue(value?: bigint | null, digits = 4) {
   if (value === undefined || value === null) return "-";
   return Intl.NumberFormat("en-US", { maximumFractionDigits: digits }).format(Number(formatEther(value)));
@@ -148,7 +162,7 @@ export function ethToUsd(amount: bigint, priceUsd: number | null): string | null
 }
 
 export function parseSponsorAmount(value: string) {
-  return parseUnits(value || "0", 18);
+  return parseUnits((value || "0").trim(), 18);
 }
 
 export function parseTargetValue(value: string) {
@@ -172,7 +186,8 @@ export function zeroAddressFallback(value?: string) {
 }
 
 export function parseSponsorDuration(value: string) {
-  return BigInt(value || DEFAULT_SPONSOR_DURATION.toString());
+  const trimmed = value.trim();
+  return BigInt(trimmed || DEFAULT_SPONSOR_DURATION.toString());
 }
 
 export function sponsorDefaultValue() {

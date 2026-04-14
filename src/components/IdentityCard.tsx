@@ -55,7 +55,7 @@ export function IdentityCard({
           </div>
         </div>
         <div className="data-row">
-          <span>entries</span>
+          <span>entry ETH</span>
           <div className="data-value-stack">
             <strong>{formatEthValue(totalEntries)} ETH</strong>
             {ethToUsd(totalEntries, ethPriceUsd) && (
@@ -64,7 +64,7 @@ export function IdentityCard({
           </div>
         </div>
         <div className="data-row">
-          <span>locker benefit</span>
+          <span>engine rewards</span>
           <div className="data-value-stack">
             <strong>{formatEthValue(totalRewardsForwarded)} ETH</strong>
             {ethToUsd(totalRewardsForwarded, ethPriceUsd) && (
@@ -72,9 +72,18 @@ export function IdentityCard({
             )}
           </div>
         </div>
+        <div className="data-row">
+          <span>engine queue</span>
+          <div className="data-value-stack">
+            <strong>{formatEthValue(pendingRewardEth)} ETH</strong>
+            {ethToUsd(pendingRewardEth, ethPriceUsd) && (
+              <small className="row-usd">{ethToUsd(pendingRewardEth, ethPriceUsd)}</small>
+            )}
+          </div>
+        </div>
       </div>
       <button className="ghost-button full-width" disabled={flushDisabled} onClick={onFlush}>
-        Flush queued reward ETH
+        Flush queued engine reward ETH
       </button>
     </article>
   );

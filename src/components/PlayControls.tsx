@@ -17,6 +17,8 @@ type PlayControlsProps = {
   isConfirming: boolean;
   userPendingEth: bigint;
   userPendingNara: bigint;
+  walletConnected: boolean;
+  walletNaraBalance: bigint | undefined;
   naraPriceUsd: number | null;
   ethPriceUsd: number | null;
 };
@@ -38,9 +40,25 @@ export function PlayControls({
   isConfirming,
   userPendingEth,
   userPendingNara,
+  walletConnected,
+  walletNaraBalance,
   naraPriceUsd,
   ethPriceUsd,
 }: PlayControlsProps) {
+  const burnBalanceLabel = !walletConnected
+    ? "Connect wallet to read burn balance."
+    : walletNaraBalance === undefined
+      ? "Reading wallet NARA..."
+      : `Wallet burn balance: ${formatToken(walletNaraBalance)} NARA.`;
+
+  const sabotageBalanceLabel = !walletConnected
+    ? "Connect wallet to read sabotage balance."
+    : walletNaraBalance === undefined
+      ? "Reading wallet NARA..."
+      : `Sabotage uses the same ${formatToken(walletNaraBalance)} NARA wallet balance.`;
+
+  const canAfford = (amount: bigint) => walletNaraBalance === undefined || amount <= walletNaraBalance;
+
   return (
     <>
       <div className="play-grid compact">
@@ -74,7 +92,7 @@ export function PlayControls({
               <button
                 key={preset.label}
                 className="action-chip"
-                disabled={moveDisabled}
+                disabled={moveDisabled || !canAfford(preset.amount)}
                 onClick={() => onMove(preset.amount)}
               >
                 <span>{preset.label}</span>
@@ -85,6 +103,7 @@ export function PlayControls({
               </button>
             ))}
           </div>
+          <small className="inline-note">{burnBalanceLabel}</small>
         </div>
 
         <div className="play-block sabotage-block">
@@ -103,7 +122,7 @@ export function PlayControls({
               <button
                 key={preset.label}
                 className="action-chip danger"
-                disabled={sabotageDisabled}
+                disabled={sabotageDisabled || !canAfford(preset.amount)}
                 onClick={() => onSabotage(preset.amount)}
               >
                 <span>{preset.label}</span>
@@ -114,6 +133,7 @@ export function PlayControls({
               </button>
             ))}
           </div>
+          <small className="inline-note">{sabotageBalanceLabel}</small>
           {target.trim() && sabotageDisabled ? (
             <small className="inline-note">Target set, but only active runners can sabotage.</small>
           ) : null}
@@ -128,7 +148,7 @@ export function PlayControls({
           </strong>
           {(ethToUsd(userPendingEth, ethPriceUsd) || naraToUsd(userPendingNara, naraPriceUsd)) && (
             <small className="claim-usd">
-              ≈ {formatUsd(
+              ~ {formatUsd(
                 (Number(userPendingEth) / 1e18) * (ethPriceUsd ?? 0) +
                 (Number(userPendingNara) / 1e18) * (naraPriceUsd ?? 0)
               )}

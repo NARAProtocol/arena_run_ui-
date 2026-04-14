@@ -6,8 +6,8 @@ type PrizeClockProps = {
   harvestedNara: bigint;
   unharvestedEth: bigint;
   unharvestedNara: bigint;
-  prizePoolEth: bigint;
-  prizePoolNara: bigint;
+  headlineEth: bigint;
+  headlineNara: bigint;
   sponsorCount: bigint;
   nextCull: bigint | undefined;
   nextEpoch: bigint | undefined;
@@ -22,8 +22,8 @@ export function PrizeClock({
   harvestedNara,
   unharvestedEth,
   unharvestedNara,
-  prizePoolEth,
-  prizePoolNara,
+  headlineEth,
+  headlineNara,
   sponsorCount,
   nextCull,
   nextEpoch,
@@ -60,7 +60,7 @@ export function PrizeClock({
             </div>
           </div>
           <div className="data-row">
-            <span>accruing</span>
+            <span>accruing sponsor yield</span>
             <div className="data-value-stack">
               <strong>{formatEthValue(unharvestedEth)} ETH / {formatToken(unharvestedNara)} NARA</strong>
               {combinedUsd(unharvestedEth, unharvestedNara) && (
@@ -69,11 +69,11 @@ export function PrizeClock({
             </div>
           </div>
           <div className="data-row">
-            <span>pool live</span>
+            <span>headline</span>
             <div className="data-value-stack">
-              <strong>{formatEthValue(prizePoolEth)} ETH / {formatToken(prizePoolNara)} NARA</strong>
-              {combinedUsd(prizePoolEth, prizePoolNara) && (
-                <small className="row-usd">{combinedUsd(prizePoolEth, prizePoolNara)}</small>
+              <strong>{formatEthValue(headlineEth)} ETH / {formatToken(headlineNara)} NARA</strong>
+              {combinedUsd(headlineEth, headlineNara) && (
+                <small className="row-usd">{combinedUsd(headlineEth, headlineNara)}</small>
               )}
             </div>
           </div>
@@ -110,6 +110,9 @@ export function PrizeClock({
           </div>
         </div>
       </div>
+      <small className="inline-note prize-source-note">
+        Sponsor lock rewards harvest into the prize pool. Runner entry ETH routes to engine lockers.
+      </small>
     </article>
   );
 }

@@ -25,6 +25,10 @@ import {
   BOARD_API_URL,
   DEFAULT_SPONSOR_DURATION,
   ethToUsd,
+  formatTokenInputValue,
+  MAX_SPONSOR_DEPOSIT,
+  MIN_SPONSOR_DEPOSIT,
+  MIN_SPONSOR_DURATION,
   formatEntryLabel,
   formatEthValue,
   formatToken,
@@ -251,6 +255,44 @@ export default function App() {
     functionName: "lockFeeWei",
     query: { enabled: Boolean(engineAddress) },
   });
+  const { data: engineConfig } = useReadContract({
+    address: engineAddress,
+    abi: [{
+      type: "function",
+      name: "config",
+      stateMutability: "view",
+      inputs: [],
+      outputs: [
+        { type: "uint256", name: "eMax" },
+        { type: "uint256", name: "beta0Wad" },
+        { type: "uint256", name: "mWad" },
+        { type: "uint256", name: "aWad" },
+        { type: "uint256", name: "bWad" },
+        { type: "uint256", name: "cWad" },
+        { type: "uint256", name: "dWad" },
+        { type: "uint256", name: "dripSplitWad" },
+        { type: "uint256", name: "durationLinearWad" },
+        { type: "uint256", name: "durationQuadraticWad" },
+        { type: "uint256", name: "growthFactorWad" },
+        { type: "uint256", name: "minBaseEmission" },
+        { type: "uint256", name: "maxBaseEmission" },
+        { type: "uint256", name: "warmupRateWad" },
+        { type: "uint256", name: "bootstrapInitialWeight" },
+        { type: "uint256", name: "bootstrapDecayWad" },
+        { type: "uint64", name: "activationDelayEpochs" },
+        { type: "uint64", name: "maxLockEpochs" },
+      ],
+    }] as const,
+    functionName: "config",
+    query: { enabled: Boolean(engineAddress) },
+  });
+  const { data: walletNaraBalance } = useReadContract({
+    address: NARA_TOKEN_ADDRESS,
+    abi: naraTokenAbi,
+    functionName: "balanceOf",
+    args: [(address ?? "0x0000000000000000000000000000000000000000") as `0x${string}`],
+    query: { enabled: Boolean(address) },
+  });
 
   const { writeContract, writeContractAsync, data: hash, isPending } = useWriteContract();
   const { isLoading: isConfirming, isSuccess } = useWaitForTransactionReceipt({ hash });
@@ -324,7 +366,51 @@ export default function App() {
   const sabotageDisabled = moveDisabled || !target.trim();
   const joinDisabled = !ARENA_ADDRESS || !isConnected || isWrongNetwork || isPending || !entryFee || joinBlockedByPrizeSeed || userActive;
   const claimDisabled = !ARENA_ADDRESS || !isConnected || isWrongNetwork || isPending || (userPendingEth === 0n && userPendingNara === 0n);
-  const sponsorDisabled = !ARENA_ADDRESS || !isConnected || isWrongNetwork || isPending || lockFee === undefined;
+  const maxSponsorDuration = engineConfig?.[17] as bigint | undefined;
+  const sponsorAmountValue = (() => {
+    try {
+      return parseSponsorAmount(sponsorAmount);
+    } catch {
+      return undefined;
+    }
+  })();
+  const sponsorDurationValue = (() => {
+    try {
+      return parseSponsorDuration(sponsorDuration);
+    } catch {
+      return undefined;
+    }
+  })();
+  const sponsorMaxAmount = walletNaraBalance === undefined
+    ? undefined
+    : walletNaraBalance > MAX_SPONSOR_DEPOSIT
+      ? MAX_SPONSOR_DEPOSIT
+      : walletNaraBalance;
+  const sponsorAmountExceedsBalance = sponsorAmountValue !== undefined && walletNaraBalance !== undefined && sponsorAmountValue > walletNaraBalance;
+  const sponsorValidationMessage = (() => {
+    const amountRaw = sponsorAmount.trim();
+    if (!amountRaw) return "Enter a sponsor amount.";
+    if (sponsorAmountValue === undefined) return "Enter a valid NARA amount.";
+    if (sponsorAmountValue === 0n) return "Sponsor amount must be greater than zero.";
+    if (sponsorAmountValue < MIN_SPONSOR_DEPOSIT) return `Minimum sponsor deposit is ${formatToken(MIN_SPONSOR_DEPOSIT)} NARA.`;
+    if (sponsorAmountValue > MAX_SPONSOR_DEPOSIT) return `Maximum sponsor deposit is ${formatToken(MAX_SPONSOR_DEPOSIT)} NARA per sponsor lane.`;
+    if (walletNaraBalance !== undefined && sponsorAmountValue > walletNaraBalance) {
+      return `Amount exceeds your wallet balance (${formatToken(walletNaraBalance)} NARA).`;
+    }
+
+    const durationRaw = sponsorDuration.trim();
+    if (!durationRaw) return "Enter a sponsor duration.";
+    if (sponsorDurationValue === undefined) return "Enter a whole-number duration in epochs.";
+    if (sponsorDurationValue < MIN_SPONSOR_DURATION) {
+      return `Minimum sponsor duration is ${MIN_SPONSOR_DURATION.toString()} epochs.`;
+    }
+    if (maxSponsorDuration !== undefined && sponsorDurationValue > maxSponsorDuration) {
+      return `Maximum sponsor duration is ${maxSponsorDuration.toString()} epochs.`;
+    }
+
+    return null;
+  })();
+  const sponsorDisabled = !ARENA_ADDRESS || !isConnected || isWrongNetwork || isPending || lockFee === undefined || Boolean(sponsorValidationMessage);
   const flushDisabled = !ARENA_ADDRESS || pendingRewardEth === 0n || isPending || isWrongNetwork;
   const txBtnClass = isPending ? "is-pending" : isSuccess ? "is-success" : "";
 
@@ -463,13 +549,28 @@ export default function App() {
     writeContract({ address: ARENA_ADDRESS, abi: arenaAbi, functionName: "claim" });
   }
 
+  function setSponsorMaxAmount() {
+    if (sponsorMaxAmount === undefined) return;
+    setSponsorAmount(formatTokenInputValue(sponsorMaxAmount));
+  }
+
   async function sendSponsorDeposit() {
     if (!ARENA_ADDRESS || lockFee === undefined) return;
+    if (sponsorValidationMessage) {
+      setStatusText(sponsorValidationMessage);
+      return;
+    }
+    if (sponsorAmountValue === undefined || sponsorDurationValue === undefined) return;
+
     try {
-      const amount = parseSponsorAmount(sponsorAmount);
-      const duration = parseSponsorDuration(sponsorDuration);
-      await ensureNaraAllowance(amount);
-      writeContract({ address: ARENA_ADDRESS, abi: arenaAbi, functionName: "sponsorDeposit", args: [amount, duration], value: lockFee });
+      await ensureNaraAllowance(sponsorAmountValue);
+      writeContract({
+        address: ARENA_ADDRESS,
+        abi: arenaAbi,
+        functionName: "sponsorDeposit",
+        args: [sponsorAmountValue, sponsorDurationValue],
+        value: lockFee,
+      });
     } catch {
       setStatusText("Transaction failed. Check your NARA balance and try again.");
     }
@@ -491,7 +592,7 @@ export default function App() {
           <p className="eyebrow">NARA / Arena Run</p>
           <h1>NARA Arena</h1>
           <p className="arena-subcopy">
-            Burn NARA to move. Pay ETH to enter. Sponsors seed the purse. Locker rewards route out of every join.
+            Burn NARA to move. Pay ETH to enter. Sponsors seed the purse. Entry ETH rewards lockers while sponsor yield fills prizes.
           </p>
         </div>
         <div className="arena-topbar-side">
@@ -541,11 +642,11 @@ export default function App() {
           loading={!arenaReads}
         />
         <MetricCard
-          label="Locker flow"
+          label="Engine rewards"
           value={`${formatEthValue(totalRewardsForwarded)} ETH`}
           hint={prices.eth
-            ? `${formatEthValue(pendingRewardEth)} ETH queued · ${ethToUsd(totalRewardsForwarded, prices.eth) ?? ""}`
-            : `${formatEthValue(pendingRewardEth)} ETH queued`}
+            ? `${formatEthValue(pendingRewardEth)} ETH queued for engine | ${ethToUsd(totalRewardsForwarded, prices.eth) ?? ""}`
+            : `${formatEthValue(pendingRewardEth)} ETH queued for engine`}
           loading={!arenaReads}
         />
       </section>
@@ -601,6 +702,8 @@ export default function App() {
               isConfirming={isConfirming}
               userPendingEth={userPendingEth}
               userPendingNara={userPendingNara}
+              walletConnected={isConnected}
+              walletNaraBalance={walletNaraBalance}
               naraPriceUsd={prices.nara}
               ethPriceUsd={prices.eth}
             />
@@ -611,8 +714,8 @@ export default function App() {
             harvestedNara={harvestedNara}
             unharvestedEth={unharvestedEth}
             unharvestedNara={unharvestedNara}
-            prizePoolEth={prizePoolEth}
-            prizePoolNara={prizePoolNara}
+            headlineEth={headlineEth}
+            headlineNara={headlineNara}
             sponsorCount={sponsorCount}
             nextCull={nextCull}
             nextEpoch={nextEpoch}
@@ -634,10 +737,17 @@ export default function App() {
             sponsorTvl={sponsorTvl}
             lockFee={lockFee}
             joinBlockedByPrizeSeed={joinBlockedByPrizeSeed}
+            walletConnected={isConnected}
+            walletNaraBalance={walletNaraBalance}
+            sponsorAmountExceedsBalance={sponsorAmountExceedsBalance}
+            sponsorValidationMessage={sponsorValidationMessage}
             sponsorAmount={sponsorAmount}
             sponsorDuration={sponsorDuration}
+            maxSponsorDuration={maxSponsorDuration}
+            maxSponsorAmount={sponsorMaxAmount}
             onAmountChange={setSponsorAmount}
             onDurationChange={setSponsorDuration}
+            onSetMaxAmount={setSponsorMaxAmount}
             onSubmit={sendSponsorDeposit}
             disabled={sponsorDisabled}
             naraPriceUsd={prices.nara}
