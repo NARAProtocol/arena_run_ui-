@@ -913,6 +913,11 @@ body::after {
 .inline-note { display: block; margin-top: 8px; }
 .inline-note.error { color: var(--danger); }
 .prize-source-note { margin-top: 12px; }
+.button-stack {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
 
 /* ─── Claim row ───────────────────────────────────────────── */
 

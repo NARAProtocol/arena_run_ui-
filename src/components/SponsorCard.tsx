@@ -17,6 +17,9 @@ type SponsorCardProps = {
   walletNaraBalance: bigint | undefined;
   sponsorAmountExceedsBalance: boolean;
   sponsorValidationMessage: string | null;
+  engineSyncRequired: boolean;
+  engineSyncMessage: string | null;
+  engineSyncBatchSize: bigint;
   sponsorAmount: string;
   sponsorDuration: string;
   maxSponsorDuration: bigint | undefined;
@@ -24,8 +27,10 @@ type SponsorCardProps = {
   onAmountChange: (value: string) => void;
   onDurationChange: (value: string) => void;
   onSetMaxAmount: () => void;
+  onSyncEngine: () => void;
   onSubmit: () => void;
   disabled: boolean;
+  syncEngineDisabled: boolean;
   naraPriceUsd: number | null;
   ethPriceUsd: number | null;
 };
@@ -39,6 +44,9 @@ export function SponsorCard({
   walletNaraBalance,
   sponsorAmountExceedsBalance,
   sponsorValidationMessage,
+  engineSyncRequired,
+  engineSyncMessage,
+  engineSyncBatchSize,
   sponsorAmount,
   sponsorDuration,
   maxSponsorDuration,
@@ -46,8 +54,10 @@ export function SponsorCard({
   onAmountChange,
   onDurationChange,
   onSetMaxAmount,
+  onSyncEngine,
   onSubmit,
   disabled,
+  syncEngineDisabled,
   naraPriceUsd,
   ethPriceUsd,
 }: SponsorCardProps) {
@@ -68,6 +78,7 @@ export function SponsorCard({
           : `Available to sponsor: ${formatToken(walletNaraBalance)} NARA.`;
 
   const sponsorLimitNote = `Limits: ${formatToken(MIN_SPONSOR_DEPOSIT)}-${formatToken(MAX_SPONSOR_DEPOSIT)} NARA | ${MIN_SPONSOR_DURATION.toString()}-${maxSponsorDuration?.toString() ?? "..."} epochs.`;
+  const syncButtonLabel = `Sync engine (${engineSyncBatchSize.toString()} epoch${engineSyncBatchSize === 1n ? "" : "s"})`;
 
   return (
     <article className="arena-card sponsor-card">
@@ -118,7 +129,12 @@ export function SponsorCard({
         <label className="compact-field">
           <div className="compact-field-head">
             <span>amount</span>
-            <button type="button" className="field-action-button" onClick={onSetMaxAmount} disabled={maxSponsorAmount === undefined || maxSponsorAmount === 0n}>
+            <button
+              type="button"
+              className="field-action-button"
+              onClick={onSetMaxAmount}
+              disabled={engineSyncRequired || maxSponsorAmount === undefined || maxSponsorAmount === 0n}
+            >
               Max
             </button>
           </div>
@@ -127,6 +143,7 @@ export function SponsorCard({
             value={sponsorAmount}
             onChange={(e) => onAmountChange(e.target.value)}
             placeholder="1000"
+            disabled={engineSyncRequired}
           />
         </label>
         <small className={`inline-note${sponsorValidationMessage ? " error" : ""}`}>
@@ -139,12 +156,25 @@ export function SponsorCard({
             value={sponsorDuration}
             onChange={(e) => onDurationChange(e.target.value)}
             placeholder="96"
+            disabled={engineSyncRequired}
           />
         </label>
         <small className="inline-note">{sponsorLimitNote}</small>
-        <button className="secondary-button full-width" disabled={disabled} onClick={onSubmit}>
-          Fund sponsor lane
-        </button>
+        {engineSyncRequired && (
+          <small className="inline-note">
+            {engineSyncMessage ?? "Clear the engine backlog first, then fund the sponsor lane."} Repeat sync until this warning clears.
+          </small>
+        )}
+        <div className="button-stack">
+          {engineSyncRequired && (
+            <button className="ghost-button full-width" disabled={syncEngineDisabled} onClick={onSyncEngine}>
+              {syncButtonLabel}
+            </button>
+          )}
+          <button className="secondary-button full-width" disabled={disabled} onClick={onSubmit}>
+            Fund sponsor lane
+          </button>
+        </div>
       </div>
     </article>
   );

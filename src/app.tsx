@@ -3,6 +3,7 @@ import { type ReactNode, useEffect, useState } from "react";
 import { parseAbiItem } from "viem";
 import {
   useAccount,
+  useBalance,
   usePublicClient,
   useReadContract,
   useReadContracts,
@@ -62,6 +63,7 @@ type BoardResponse = {
 };
 
 type ContractReadResult = { status: string; result?: unknown };
+type EngineEpochStateResult = { epoch?: bigint };
 
 // ─── Contract read index ─────────────────────────────────────────────────────
 
@@ -87,6 +89,53 @@ const joinedEvent = parseAbiItem("event Joined(address indexed runner, uint256 e
 const forwardEvent = parseAbiItem("event Forward(address indexed runner, uint256 naraBurned, uint256 distanceMoved, uint256 newPosition, uint256 heatStreak)");
 const sabotageEvent = parseAbiItem("event Sabotage(address indexed attacker, address indexed target, uint256 naraBurned, uint256 distancePushed, uint256 targetNewPosition, uint256 attackerHeatStreak)");
 const epochSettledEvent = parseAbiItem("event EpochSettled(uint64 indexed epoch, uint256 distributedEth, uint256 distributedNara, address winner, uint256 winnerAmountEth, uint256 winnerAmountNara, uint256 topFiveAmountEth, uint256 topFiveAmountNara)");
+const engineEpochStateComponents = [
+  { type: "uint64", name: "epoch" },
+  { type: "uint64", name: "timestamp" },
+  { type: "uint256", name: "circulatingSupply" },
+  { type: "uint256", name: "totalLocked" },
+  { type: "uint256", name: "activeTotalWeight" },
+  { type: "uint256", name: "weightedLockShareWad" },
+  { type: "uint256", name: "stressWad" },
+  { type: "uint256", name: "betaWad" },
+  { type: "uint256", name: "horizon" },
+  { type: "uint256", name: "retentionWad" },
+  { type: "uint256", name: "baseEmission" },
+  { type: "uint256", name: "emission" },
+  { type: "uint256", name: "admittedSupply" },
+  { type: "uint256", name: "distributedNara" },
+  { type: "uint256", name: "distributedEth" },
+  { type: "uint256", name: "treasuryAmount" },
+  { type: "uint256", name: "warmupFactorWad" },
+  { type: "uint256", name: "bootstrapWeight" },
+  { type: "uint256", name: "heartbeat" },
+] as const;
+const engineSyncAbi = [
+  {
+    type: "function",
+    name: "currentEpoch",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ type: "uint64" }],
+  },
+  {
+    type: "function",
+    name: "epochState",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ type: "tuple", name: "state", components: engineEpochStateComponents }],
+  },
+  {
+    type: "function",
+    name: "advanceEpochs",
+    stateMutability: "nonpayable",
+    inputs: [{ type: "uint256", name: "maxSteps" }],
+    outputs: [
+      { type: "uint256", name: "stepsAdvanced" },
+      { type: "tuple", name: "lastSnapshot", components: engineEpochStateComponents },
+    ],
+  },
+] as const;
 
 // ─── Market prices hook ───────────────────────────────────────────────────────
 
@@ -212,13 +261,13 @@ export default function App() {
   const readResults = arenaReads as readonly ContractReadResult[] | undefined;
 
   const engineAddress = readSuccessResult(readResults, READ_INDEX.engine) as `0x${string}` | undefined;
-  const { data: lockFee } = useReadContract({
+  const { data: lockFee, refetch: refetchLockFee } = useReadContract({
     address: engineAddress,
     abi: [{ type: "function", name: "lockFeeWei", stateMutability: "view", inputs: [], outputs: [{ type: "uint256" }] }] as const,
     functionName: "lockFeeWei",
     query: { enabled: Boolean(engineAddress) },
   });
-  const { data: engineConfig } = useReadContract({
+  const { data: engineConfig, refetch: refetchEngineConfig } = useReadContract({
     address: engineAddress,
     abi: [{
       type: "function",
@@ -249,12 +298,28 @@ export default function App() {
     functionName: "config",
     query: { enabled: Boolean(engineAddress) },
   });
-  const { data: walletNaraBalance } = useReadContract({
+  const { data: walletNaraBalance, refetch: refetchWalletNaraBalance } = useReadContract({
     address: NARA_TOKEN_ADDRESS,
     abi: naraTokenAbi,
     functionName: "balanceOf",
     args: [(address ?? "0x0000000000000000000000000000000000000000") as `0x${string}`],
     query: { enabled: Boolean(address) },
+  });
+  const { data: nativeBalance, refetch: refetchNativeBalance } = useBalance({
+    address,
+    query: { enabled: Boolean(address) },
+  });
+  const { data: engineLiveEpoch, refetch: refetchEngineLiveEpoch } = useReadContract({
+    address: engineAddress,
+    abi: engineSyncAbi,
+    functionName: "currentEpoch",
+    query: { enabled: Boolean(engineAddress) },
+  });
+  const { data: engineEpochState, refetch: refetchEngineEpochState } = useReadContract({
+    address: engineAddress,
+    abi: engineSyncAbi,
+    functionName: "epochState",
+    query: { enabled: Boolean(engineAddress) },
   });
 
   const { writeContract, writeContractAsync, data: hash, isPending } = useWriteContract();
@@ -296,6 +361,21 @@ export default function App() {
   const userPosition = runnerState ? (runnerState[0] as bigint) : 0n;
   const userActive = runnerState ? Boolean(runnerState[9]) : false;
   const runnerLaneIndex = runnerState ? Number(runnerState[10] ?? 0) : 0;
+  const nativeBalanceValue = nativeBalance?.value;
+  const engineSettledEpoch = (() => {
+    if (!engineEpochState) return undefined;
+    const epochValue = (engineEpochState as EngineEpochStateResult).epoch;
+    return typeof epochValue === "bigint" ? epochValue : undefined;
+  })();
+  const engineBacklog = engineLiveEpoch !== undefined && engineSettledEpoch !== undefined && engineLiveEpoch > engineSettledEpoch
+    ? engineLiveEpoch - engineSettledEpoch
+    : 0n;
+  const engineSyncRequired = engineBacklog > 0n;
+  const engineSyncBatchSize = engineBacklog > 100n ? 50n : engineBacklog > 25n ? 25n : engineBacklog > 0n ? engineBacklog : 25n;
+  const engineSyncMessage = engineSyncRequired
+    ? `Engine is ${engineBacklog.toString()} epochs behind. Sync ${engineSyncBatchSize.toString()} epoch${engineSyncBatchSize === 1n ? "" : "s"} at a time before sponsoring.`
+    : null;
+  const sponsorNativeFeeShortfall = lockFee !== undefined && nativeBalanceValue !== undefined && nativeBalanceValue < lockFee;
 
   // ── Derived UI state ────────────────────────────────────────────────────────
 
@@ -351,6 +431,7 @@ export default function App() {
       : walletNaraBalance;
   const sponsorAmountExceedsBalance = sponsorAmountValue !== undefined && walletNaraBalance !== undefined && sponsorAmountValue > walletNaraBalance;
   const sponsorValidationMessage = (() => {
+    if (engineSyncMessage) return engineSyncMessage;
     const amountRaw = sponsorAmount.trim();
     if (!amountRaw) return "Enter a sponsor amount.";
     if (sponsorAmountValue === undefined) return "Enter a valid NARA amount.";
@@ -370,10 +451,13 @@ export default function App() {
     if (maxSponsorDuration !== undefined && sponsorDurationValue > maxSponsorDuration) {
       return `Maximum sponsor duration is ${maxSponsorDuration.toString()} epochs.`;
     }
+    if (sponsorNativeFeeShortfall && lockFee !== undefined) {
+      return `Need at least ${formatEthValue(lockFee)} ETH on Base for the sponsor lock fee, plus gas.`;
+    }
 
     return null;
   })();
-  const sponsorDisabled = !ARENA_ADDRESS || !isConnected || isWrongNetwork || isPending || lockFee === undefined || Boolean(sponsorValidationMessage);
+  const sponsorDisabled = !ARENA_ADDRESS || !isConnected || isWrongNetwork || isPending || lockFee === undefined || engineSyncRequired || Boolean(sponsorValidationMessage);
   const flushDisabled = !ARENA_ADDRESS || pendingRewardEth === 0n || isPending || isWrongNetwork;
   const txBtnClass = isPending ? "is-pending" : isSuccess ? "is-success" : "";
 
@@ -453,8 +537,30 @@ export default function App() {
   useEffect(() => {
     if (isPending) setStatusText("Waiting for wallet confirmation...");
     else if (isConfirming) setStatusText("Transaction submitted. Waiting for Base confirmation...");
-    else if (isSuccess) { setStatusText("Transaction confirmed."); refetch(); }
-  }, [isPending, isConfirming, isSuccess, refetch]);
+    else if (isSuccess) {
+      setStatusText("Transaction confirmed.");
+      void Promise.allSettled([
+        refetch(),
+        refetchLockFee(),
+        refetchEngineConfig(),
+        refetchWalletNaraBalance(),
+        refetchNativeBalance(),
+        refetchEngineLiveEpoch(),
+        refetchEngineEpochState(),
+      ]);
+    }
+  }, [
+    isPending,
+    isConfirming,
+    isSuccess,
+    refetch,
+    refetchLockFee,
+    refetchEngineConfig,
+    refetchWalletNaraBalance,
+    refetchNativeBalance,
+    refetchEngineLiveEpoch,
+    refetchEngineEpochState,
+  ]);
 
   // ── Actions ─────────────────────────────────────────────────────────────────
 
@@ -517,8 +623,23 @@ export default function App() {
     setSponsorAmount(formatTokenInputValue(sponsorMaxAmount));
   }
 
+  function sendEngineSync() {
+    if (!engineAddress || !isConnected || isWrongNetwork || !engineSyncRequired) return;
+    setStatusText(`Syncing engine by ${engineSyncBatchSize.toString()} epoch${engineSyncBatchSize === 1n ? "" : "s"} - confirm in wallet...`);
+    writeContract({
+      address: engineAddress,
+      abi: engineSyncAbi,
+      functionName: "advanceEpochs",
+      args: [engineSyncBatchSize],
+    });
+  }
+
   async function sendSponsorDeposit() {
     if (!ARENA_ADDRESS || lockFee === undefined) return;
+    if (engineSyncMessage) {
+      setStatusText(engineSyncMessage);
+      return;
+    }
     if (sponsorValidationMessage) {
       setStatusText(sponsorValidationMessage);
       return;
@@ -535,7 +656,7 @@ export default function App() {
         value: lockFee,
       });
     } catch {
-      setStatusText("Transaction failed. Check your NARA balance and try again.");
+      setStatusText("Sponsor failed. Confirm your NARA balance, Base ETH for the lock fee, and that the engine is synced.");
     }
   }
 
@@ -631,6 +752,13 @@ export default function App() {
       {joinBlockedByPrizeSeed && (
         <StatusStrip tone="warning" title="Prize not seeded" body="The sponsor lane must be funded before players can join." />
       )}
+      {engineSyncRequired && (
+        <StatusStrip
+          tone="warning"
+          title="Engine sync required"
+          body={`${engineSyncMessage ?? "Engine backlog detected."} Sponsor deposits will fail until the engine catches up.`}
+        />
+      )}
 
       {/* ── Main grid ── */}
       <section className="arena-main-grid">
@@ -704,6 +832,9 @@ export default function App() {
             walletNaraBalance={walletNaraBalance}
             sponsorAmountExceedsBalance={sponsorAmountExceedsBalance}
             sponsorValidationMessage={sponsorValidationMessage}
+            engineSyncRequired={engineSyncRequired}
+            engineSyncMessage={engineSyncMessage}
+            engineSyncBatchSize={engineSyncBatchSize}
             sponsorAmount={sponsorAmount}
             sponsorDuration={sponsorDuration}
             maxSponsorDuration={maxSponsorDuration}
@@ -711,8 +842,10 @@ export default function App() {
             onAmountChange={setSponsorAmount}
             onDurationChange={setSponsorDuration}
             onSetMaxAmount={setSponsorMaxAmount}
+            onSyncEngine={sendEngineSync}
             onSubmit={sendSponsorDeposit}
             disabled={sponsorDisabled}
+            syncEngineDisabled={!engineAddress || !isConnected || isWrongNetwork || isPending || !engineSyncRequired}
             naraPriceUsd={prices.nara}
             ethPriceUsd={prices.eth}
           />
